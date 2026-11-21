@@ -33,6 +33,8 @@ interface FakeContext extends OpenCodePluginContext {
   readonly emit: (event: { type: string; data: Record<string, unknown> }) => void
   readonly permissionRequests: Map<string, { action: string; resources: readonly string[]; message?: string }>
   readonly permissionAsserts: Array<{ action: string; resources: readonly string[] }>
+  /** Child session to the session that started it, as opencode reports through session.get(). */
+  readonly sessionParents: Map<string, string>
   denyPermissionAsserts: boolean
 }
 
@@ -45,6 +47,7 @@ function createFakeContext(directory: string, options: unknown, sessionDirectory
   const listeners: Array<(event: { type: string; data: Record<string, unknown> }) => void> = []
   const permissionRequests = new Map<string, { action: string; resources: readonly string[]; message?: string }>()
   const permissionAsserts: Array<{ action: string; resources: readonly string[] }> = []
+  const sessionParents = new Map<string, string>()
 
   const ctx: FakeContext = {
     location: { directory: sessionDirectory, project: { directory } },
@@ -56,12 +59,17 @@ function createFakeContext(directory: string, options: unknown, sessionDirectory
     events,
     permissionRequests,
     permissionAsserts,
+    sessionParents,
     denyPermissionAsserts: false,
     emit(event) {
       events.push(event)
       for (const listener of listeners) listener(event)
     },
     session: {
+      get(input: { sessionID: string }) {
+        const parentID = sessionParents.get(input.sessionID)
+        return Promise.resolve({ id: input.sessionID, ...(parentID === undefined ? {} : { parentID }) })
+      },
       hook(name: string, callback: (event: never) => unknown) {
         sessionHooks.set(name, callback)
         return Promise.resolve({ dispose: () => Promise.resolve() })
@@ -191,9 +199,9 @@ function getTool(ctx: FakeContext, name: string): ToolDefinition {
   return tool
 }
 
-async function executeTool(ctx: FakeContext, name: string, input: unknown): Promise<unknown> {
+async function executeTool(ctx: FakeContext, name: string, input: unknown, sessionID = toolContext.sessionID): Promise<unknown> {
   const tool = getTool(ctx, name)
-  const result = await tool.execute(input, { ...toolContext, signal: new AbortController().signal })
+  const result = await tool.execute(input, { ...toolContext, sessionID, signal: new AbortController().signal })
   if (typeof result.content !== "string") {
     throw new TypeError(`tool ${name} did not return text content`)
   }
@@ -716,6 +724,103 @@ describe("OpenUltraCode OpenCode 2 plugin entry point", () => {
     assert.deepEqual((await store.load()).state?.verification.map((evidence) => evidence.result), ["fail", "pass"])
   })
 
+  it("keeps another session out of a workflow's record until it adopts it", async () => {
+    const projectRoot = await createProjectRoot()
+    const store = createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } })
+    await store.update(createGateState("pass"))
+    const ctx = await setupPlugin(projectRoot, { enabled: true })
+    const evidence = { id: "VE-other", kind: "test", result: "fail", summary: "another task's check", criteriaIds: [], reason: "r", residualRisk: "x" }
+
+    const refused = await executeTool(ctx, "open_ultracode_record_verification", evidence, "session-9") as { recorded: boolean; reason: string }
+    assert.equal(refused.recorded, false)
+    assert.match(refused.reason, /belongs to another session/)
+    assert.match(refused.reason, /adopt: true/)
+    assert.equal((await executeTool(ctx, "open_ultracode_record_finding", { id: "F-1", severity: "high", confidence: "high", title: "t", evidence: ["e"], impact: "i", recommendation: "r" }, "session-9") as { recorded: boolean }).recorded, false)
+    assert.equal((await executeTool(ctx, "open_ultracode_record_intake", { phase: "completed" }, "session-9") as { recorded: boolean }).recorded, false)
+    // The other session's report says nothing was verified, and leaves the record alone.
+    assert.equal((await executeTool(ctx, "open_ultracode_completion_report", {}, "session-9") as { status: string }).status, "partial")
+    assert.equal((await executeTool(ctx, "open_ultracode_status", {}, "session-9") as { ownedByThisSession: boolean }).ownedByThisSession, false)
+    assert.deepEqual((await store.load()).state, createGateState("pass"))
+
+    // The owning session still works, and so does a subagent session it started.
+    ctx.sessionParents.set("session-1-child", "session-1-agent")
+    ctx.sessionParents.set("session-1-agent", "session-1")
+    const fromSubagent = await executeTool(ctx, "open_ultracode_record_verification", { ...evidence, id: "VE-sub", result: "pass" }, "session-1-child") as { recorded: boolean }
+    assert.equal(fromSubagent.recorded, true)
+
+    // Adopting makes the other session the owner.
+    const adopted = await executeTool(ctx, "open_ultracode_record_intake", { adopt: true, phase: "verification" }, "session-9") as { recorded: boolean }
+    assert.equal(adopted.recorded, true)
+    assert.equal((await store.load()).state?.sessionId, "session-9")
+    assert.equal((await executeTool(ctx, "open_ultracode_status", {}, "session-9") as { ownedByThisSession: boolean }).ownedByThisSession, true)
+    assert.equal((await executeTool(ctx, "open_ultracode_record_verification", evidence) as { recorded: boolean }).recorded, false)
+  })
+
+  it("only lets things that happen in the workflow's own sessions affect it", async () => {
+    const projectRoot = await createProjectRoot()
+    const store = createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } })
+    await store.update(createState())
+    const ctx = await setupPlugin(projectRoot, { enabled: true })
+    ctx.sessionParents.set("session-1-agent", "session-1")
+    const request = (sessionID: string) => ({ sessionID, options: {}, model: asEvent(models.withMax) }) as unknown as SessionContextEvent
+    const denial = (sessionID: string) => ({ sessionID, action: "edit", resources: ["src/app.ts"], effect: "deny", source: { type: "tool" } })
+    const toolError = (sessionID: string) => ({ sessionID, tool: "webfetch", status: "error", error: { message: "timed out" } })
+
+    // Another session in the same project: no high-effort hints, no block, no notice, no workflow summary.
+    const foreignRequest = request("session-9")
+    await getSessionHook(ctx, "context")(foreignRequest as never)
+    assert.deepEqual(foreignRequest.options, {})
+    await ctx.permissionHooks[0]?.(denial("session-9") as never)
+    await getToolHook(ctx, "execute.after")(toolError("session-9") as never)
+    const foreignCompaction = { sessionID: "session-9", system: [] as Array<{ type: string; text: string }> }
+    await getSessionHook(ctx, "compaction")(foreignCompaction as never)
+    assert.deepEqual(foreignCompaction.system, [])
+    assert.deepEqual((await store.load()).state, createState())
+
+    // The workflow's subagent takes part in it.
+    const ownRequest = request("session-1-agent")
+    await getSessionHook(ctx, "context")(ownRequest as never)
+    assert.equal(ownRequest.options.reasoningEffort, "high")
+    await getToolHook(ctx, "execute.after")(toolError("session-1-agent") as never)
+    assert.equal((await store.load()).state?.degradations.at(-1)?.id, "tool-error-webfetch")
+    await ctx.permissionHooks[0]?.(denial("session-1-agent") as never)
+    assert.equal((await store.load()).state?.phase, "blocked")
+  })
+
+  it("does not block the workflow when a workflow tool is given input it can correct", async () => {
+    const projectRoot = await createProjectRoot()
+    const store = createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } })
+    await store.update(createState())
+    const ctx = await setupPlugin(projectRoot, { enabled: true })
+
+    let message = ""
+    await assert.rejects(
+      () => executeTool(ctx, "open_ultracode_record_verification", { id: "VE-9", kind: "unit", result: "pass", summary: "s", criteriaIds: [] }),
+      (error: Error) => {
+        message = error.message
+        return error instanceof TypeError && /kind must be one of: test, build/.test(message)
+      }
+    )
+    // opencode reports the failed call to the tool hook with the error's message.
+    await getToolHook(ctx, "execute.after")({ sessionID: "session-1", tool: "open_ultracode_record_verification", status: "error", error: { message } } as never)
+
+    assert.deepEqual((await store.load()).state, createState())
+  })
+
+  it("lets a partial report end the workflow under an advisory gate, but not under a strict one", async () => {
+    const reportPhase = async (verificationGate: string) => {
+      const projectRoot = await createProjectRoot()
+      const store = createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } })
+      await store.update(createGateState("not-run"))
+      const ctx = await setupPlugin(projectRoot, { enabled: true, verificationGate })
+      const report = await executeTool(ctx, "open_ultracode_completion_report", {}) as { status: string }
+      return [report.status, (await store.load()).state?.phase]
+    }
+
+    assert.deepEqual(await reportPhase("strict"), ["partial", "verification"])
+    assert.deepEqual(await reportPhase("advisory"), ["partial", "completed"])
+  })
+
   it("records nothing and says so when no workflow has been started", async () => {
     const ctx = await setupPlugin(await createProjectRoot(), { enabled: true })
     const finding = await executeTool(ctx, "open_ultracode_record_finding", {
@@ -955,6 +1060,31 @@ describe("OpenUltraCode workflow lifecycle in OpenCode 2", () => {
     assert.equal((await executeTool(ctx, "open_ultracode_status", {}) as { goal: string }).goal, "other session")
   })
 
+  it("continues the session's open workflow when the verify command is run on it", async () => {
+    const ctx = await setupPlugin(await createProjectRoot(), { enabled: true })
+    await getSessionHook(ctx, "prompt")(await commandPrompt("ultracode.md", "Add a --dry-run flag") as never)
+    await executeTool(ctx, "open_ultracode_record_intake", { criteria: [{ id: "AC-1", text: "--dry-run changes nothing" }] })
+
+    await getSessionHook(ctx, "prompt")(await commandPrompt("ultracode-verify.md", "check the dry-run work") as never)
+    const status = await executeTool(ctx, "open_ultracode_status", {}) as { mode: string; goal: string }
+    assert.deepEqual([status.mode, status.goal], ["build", "Add a --dry-run flag"])
+    assert.deepEqual((await executeTool(ctx, "open_ultracode_record_intake", {}) as { criteriaIds: string[] }).criteriaIds, ["AC-1"])
+
+    // Any other command in a different mode is a different workflow.
+    await getSessionHook(ctx, "prompt")(await commandPrompt("ultracode-debug.md", "the flag crashes") as never)
+    assert.equal((await executeTool(ctx, "open_ultracode_status", {}) as { mode: string }).mode, "debug")
+  })
+
+  it("gives a workflow started from a subagent session to its top-level session", async () => {
+    const ctx = await setupPlugin(await createProjectRoot(), { enabled: true })
+    ctx.sessionParents.set("session-child", "session-1")
+    const prompt = await commandPrompt("ultracode.md", "task")
+
+    await getSessionHook(ctx, "prompt")({ ...prompt, sessionID: "session-child" } as never)
+
+    assert.equal((await executeTool(ctx, "open_ultracode_status", {}) as { ownedByThisSession: boolean }).ownedByThisSession, true)
+  })
+
   it("ends the workflow on a verified report, so the next command starts clean", async () => {
     const ctx = await setupPlugin(await createProjectRoot(), { enabled: true })
     await getSessionHook(ctx, "prompt")(await commandPrompt("ultracode.md", "first task") as never)
@@ -1030,10 +1160,10 @@ describe("OpenUltraCode workflow lifecycle in OpenCode 2", () => {
     await store.update({ ...createState(), phase: "execution" })
     const ctx = await setupPlugin(projectRoot, { enabled: true })
 
-    await ctx.permissionHooks[0]?.({ sessionID: "s", action: "open_ultracode_configure_fusion", resources: [], effect: "deny", source: { type: "agent" } } as never)
+    await ctx.permissionHooks[0]?.({ sessionID: "session-1", action: "open_ultracode_configure_fusion", resources: [], effect: "deny", source: { type: "agent" } } as never)
     assert.equal((await store.load()).state?.phase, "execution")
 
-    await ctx.permissionHooks[0]?.({ sessionID: "s", action: "bash", resources: ["rm"], effect: "deny", source: { type: "tool", messageID: "m", id: "c" } } as never)
+    await ctx.permissionHooks[0]?.({ sessionID: "session-1", action: "bash", resources: ["rm"], effect: "deny", source: { type: "tool", messageID: "m", id: "c" } } as never)
     assert.equal((await store.load()).state?.phase, "blocked")
   })
 

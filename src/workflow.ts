@@ -46,10 +46,19 @@ export function isActiveWorkflow(state: WorkflowState): boolean {
 }
 
 /**
+ * Whether a session takes part in the workflow that owns the record. `rootSessionID` is the
+ * top-level session it descends from, so a workflow's subagents belong to it. A session whose
+ * ancestry could not be determined is given the benefit of the doubt.
+ */
+export function ownsWorkflow(state: WorkflowState, rootSessionID: string | undefined): boolean {
+  return rootSessionID === undefined || state.sessionId === rootSessionID
+}
+
+/**
  * Starts a fresh workflow for a command, but keeps an unfinished workflow of the same session
- * and mode, so a follow-up command continues it instead of discarding its criteria and evidence.
- * A workflow ends when its completion report is verified or research-only, or when the phase is
- * set to completed; the next command then starts clean.
+ * when the command repeats its mode, so a follow-up continues it instead of discarding its
+ * criteria and evidence. The verify command exists to check a workflow's evidence, so it
+ * continues whatever workflow the session has open and leaves its mode as it is.
  */
 export async function startWorkflow(
   stateStore: WorkflowStateStore,
@@ -58,7 +67,12 @@ export async function startWorkflow(
   now = new Date()
 ): Promise<WorkflowState> {
   const { state } = await stateStore.load()
-  if (state !== undefined && isActiveWorkflow(state) && state.sessionId === sessionID && state.mode === command.mode) {
+  if (
+    state !== undefined &&
+    isActiveWorkflow(state) &&
+    state.sessionId === sessionID &&
+    (state.mode === command.mode || command.mode === "verify")
+  ) {
     return state
   }
 

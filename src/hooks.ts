@@ -11,11 +11,13 @@ import {
   createUnsupportedCapabilityNotice,
   withNotice
 } from "./notices.js"
+import { isInvalidInputMessage } from "./input.js"
 import type { OpenCodePluginContext, SessionPromptEvent, ToolExecuteAfterEvent } from "./opencode-v2.js"
+import { createSessionTree, type SessionTree } from "./sessions.js"
 import type { WorkflowStateStore } from "./state.js"
 import { createWorkflowTools } from "./tools.js"
 import type { DegradationNotice, OpenUltraCodeOptions, WorkflowState } from "./types.js"
-import { isActiveWorkflow, readWorkflowCommand, startWorkflow } from "./workflow.js"
+import { isActiveWorkflow, ownsWorkflow, readWorkflowCommand, startWorkflow } from "./workflow.js"
 
 const activationMarker = "OpenUltraCode mode active:"
 const fusionCheckMarker = "OpenUltraCode fusion check:"
@@ -47,28 +49,37 @@ export async function registerOpenUltraCode(
 
   const controller = new AbortController()
   const catalog = createModelCatalog(ctx)
-  const tools = [...createWorkflowTools(config, stateStore), ...createFusionTools(ctx, catalog, projectDirectory)]
+  const sessions = createSessionTree(ctx)
+  const tools = [...createWorkflowTools(config, stateStore, sessions), ...createFusionTools(ctx, catalog, projectDirectory)]
 
-  /** Changes the workflow only while one is in progress; a finished or absent workflow is left alone. */
-  const whileActive = (change: (state: WorkflowState) => WorkflowState) =>
-    stateStore.mutate((state) => (isActiveWorkflow(state) ? change(state) : undefined))
-  const block = (notice: (state: WorkflowState) => DegradationNotice) =>
-    whileActive((state) => withStateNotice({ ...state, phase: "blocked" }, notice(state)))
-  const blockOnDeniedPermission = (operation: string, reason: string) =>
-    block((state) => createPermissionDeniedNotice({ operation, reason, phase: state.phase }))
+  /**
+   * Changes the workflow only for something that happened in it: the workflow is in progress and
+   * the session takes part in it. Other sessions in the project leave the record alone.
+   */
+  const inWorkflow = async (sessionID: unknown, change: (state: WorkflowState) => WorkflowState) => {
+    const root = await sessions.root(sessionID)
+    return stateStore.mutate((state) => (isActiveWorkflow(state) && ownsWorkflow(state, root) ? change(state) : undefined))
+  }
+  const block = (sessionID: unknown, notice: (state: WorkflowState) => DegradationNotice) =>
+    inWorkflow(sessionID, (state) => withStateNotice({ ...state, phase: "blocked" }, notice(state)))
+  const blockOnDeniedPermission = (sessionID: unknown, operation: string, reason: string) =>
+    block(sessionID, (state) => createPermissionDeniedNotice({ operation, reason, phase: state.phase }))
 
   const registrations = await Promise.all([
     ctx.session.hook("context", guarded("context hook", async (event) => {
       // High-effort hints belong to a workflow; ordinary requests in the project are left as they are.
-      if (!config.highEffort.enabled || !(await hasActiveWorkflow(stateStore))) return
+      if (!config.highEffort.enabled || !(await takesPartInActiveWorkflow(stateStore, sessions, event.sessionID))) return
       applyHighEffortRequestBehavior(config.highEffort, event.options, await catalog.limits(event.model))
     })),
     ctx.session.hook("prompt", guarded("prompt hook", async (event: SessionPromptEvent) => {
-      await activateWorkflow(stateStore, event)
+      await activateWorkflow(stateStore, sessions, event)
       await checkFusionModels(catalog, stateStore, projectDirectory, event)
     })),
     ctx.session.hook("compaction", guarded("compaction hook", async (event) => {
-      const context = createCompactionContext(await stateStore.load())
+      const loaded = await stateStore.load()
+      // Another session's workflow is not this session's context.
+      if (loaded.state !== undefined && !ownsWorkflow(loaded.state, await sessions.root(event.sessionID))) return
+      const context = createCompactionContext(loaded)
       if (context.length === 0 || event.system.some((part) => part.text.startsWith(continuityHeading))) return
       // System parts are plain structs; synthetic messages would have to satisfy the LLM.Message schema.
       event.system.push({ type: "text", text: context })
@@ -78,17 +89,18 @@ export async function registerOpenUltraCode(
       // agent's tool list (for example fusion agents denying the configure tool) do not.
       if (event.effect !== "deny" || (event.source !== undefined && event.source.type !== "tool")) return
       const operation = event.resources.length > 0 ? `${event.action} ${event.resources.join(" ")}` : event.action
-      await blockOnDeniedPermission(operation, event.message ?? "permission was denied by opencode rules")
+      await blockOnDeniedPermission(event.sessionID, operation, event.message ?? "permission was denied by opencode rules")
     })),
     ctx.tool.hook("execute.after", guarded("tool hook", async (event: ToolExecuteAfterEvent) => {
       if (event.status !== "error") return
       const reason = event.error.message
       // Only failures of the workflow's own gate tools block it. Ordinary tool errors (a failed
       // search, a missing file, an MCP hiccup) are part of normal work and are only noted.
-      if (event.tool.startsWith("open_ultracode_")) {
-        await block((state) => createFailedPhaseNotice({ phase: state.phase, reason: `${event.tool} failed: ${reason}` }))
-      } else {
-        await whileActive((state) => withStateNotice(state, createToolErrorNotice({ tool: event.tool, phase: state.phase, reason })))
+      if (!event.tool.startsWith("open_ultracode_")) {
+        await inWorkflow(event.sessionID, (state) => withStateNotice(state, createToolErrorNotice({ tool: event.tool, phase: state.phase, reason })))
+      } else if (!isInvalidInputMessage(reason)) {
+        // Input the model can correct and send again is not a failure of the workflow.
+        await block(event.sessionID, (state) => createFailedPhaseNotice({ phase: state.phase, reason: `${event.tool} failed: ${reason}` }))
       }
     })),
     ctx.tool.transform((editor) => {
@@ -121,9 +133,9 @@ function logFailure(label: string, error: unknown): void {
   console.error(`OpenUltraCode: ${label} failed: ${error instanceof Error ? error.message : String(error)}`)
 }
 
-async function hasActiveWorkflow(stateStore: WorkflowStateStore): Promise<boolean> {
+async function takesPartInActiveWorkflow(stateStore: WorkflowStateStore, sessions: SessionTree, sessionID: unknown): Promise<boolean> {
   const { state } = await stateStore.load()
-  return state !== undefined && isActiveWorkflow(state)
+  return state !== undefined && isActiveWorkflow(state) && ownsWorkflow(state, await sessions.root(sessionID))
 }
 
 function withStateNotice(state: WorkflowState, notice: DegradationNotice): WorkflowState {
@@ -131,11 +143,12 @@ function withStateNotice(state: WorkflowState, notice: DegradationNotice): Workf
 }
 
 /** Starts or continues the workflow for an OpenUltraCode command and marks the prompt once. */
-async function activateWorkflow(stateStore: WorkflowStateStore, event: SessionPromptEvent): Promise<void> {
+async function activateWorkflow(stateStore: WorkflowStateStore, sessions: SessionTree, event: SessionPromptEvent): Promise<void> {
   const command = readWorkflowCommand(event.prompt.text)
   if (command === undefined) return
 
-  await startWorkflow(stateStore, command, event.sessionID)
+  // The workflow belongs to the top-level session, so the subagents it spawns can take part.
+  await startWorkflow(stateStore, command, (await sessions.root(event.sessionID)) ?? event.sessionID)
 
   if (!event.prompt.text.includes(activationMarker)) {
     // Put the marker into the admitted prompt so users and the model see it without a TUI hook.
@@ -198,14 +211,14 @@ async function checkFusionModels(
 async function observePermissionRejections(
   ctx: OpenCodePluginContext,
   signal: AbortSignal,
-  blockOnDeniedPermission: (operation: string, reason: string) => Promise<unknown>
+  blockOnDeniedPermission: (sessionID: unknown, operation: string, reason: string) => Promise<unknown>
 ): Promise<void> {
   for await (const event of ctx.event.subscribe({ types: ["permission.replied"], signal })) {
     if (event.type !== "permission.replied" || event.data.reply !== "reject") continue
 
     try {
       const { operation, reason } = await describeRejectedRequest(ctx, event.data)
-      await blockOnDeniedPermission(operation, reason)
+      await blockOnDeniedPermission(event.data.sessionID, operation, reason)
     } catch (error) {
       logFailure("permission reply handling", error)
     }

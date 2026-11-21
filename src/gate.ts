@@ -31,6 +31,16 @@ export function currentEvidence(evidence: readonly VerificationEvidence[]): read
   return [...latest.values()]
 }
 
+/**
+ * Whether a completion report ends the workflow. A strict gate holds the workflow open until it
+ * is verified; an advisory or disabled gate also lets a partial result stand. A failed or
+ * blocked check always leaves work to do. Research ends with its report.
+ */
+export function endsWorkflow(status: CompletionStatus, policy: GatePolicy): boolean {
+  if (status === "verified" || status === "research-only") return true
+  return status === "partial" && policy !== "strict"
+}
+
 /** A finding stays open until it is accepted (and addressed) or rejected with a reason. */
 export function isOpenFinding(finding: Finding): boolean {
   return finding.disposition !== "accepted" && finding.disposition !== "rejected"

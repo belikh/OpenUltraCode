@@ -1,6 +1,7 @@
-import { currentEvidence, evaluateCompletionGate, isOpenFinding } from "./gate.js"
-import { isRecord, readOneOf, readOptional, readRecord, readText, readTextList } from "./input.js"
-import type { ToolDefinition } from "./opencode-v2.js"
+import { currentEvidence, endsWorkflow, evaluateCompletionGate, isOpenFinding } from "./gate.js"
+import { InvalidInputError, isRecord, readOneOf, readOptional, readRecord, readText, readTextList } from "./input.js"
+import type { ToolDefinition, ToolExecutionContext } from "./opencode-v2.js"
+import type { SessionTree } from "./sessions.js"
 import type { WorkflowStateStore } from "./state.js"
 import {
   acceptanceCriterionSources,
@@ -17,21 +18,52 @@ import {
   type WorkflowPhase,
   type WorkflowState
 } from "./types.js"
-import { isActiveWorkflow, isResearchMode } from "./workflow.js"
+import { isActiveWorkflow, isResearchMode, ownsWorkflow } from "./workflow.js"
 
 type JsonSchema = Record<string, unknown>
 
 const noWorkflow = "No active OpenUltraCode workflow state was found. Start one with an OpenUltraCode command."
+const anotherSessionsWorkflow =
+  "The workflow record in this project belongs to another session. Start a workflow here with an OpenUltraCode command, " +
+  "or continue that record in this session by calling open_ultracode_record_intake with adopt: true."
 
-/** The workflow tools the model uses to keep the project-local workflow record and run the gate. */
-export function createWorkflowTools(config: OpenUltraCodeOptions, stateStore: WorkflowStateStore): ToolDefinition[] {
-  /** Applies a change to the active workflow and stamps it; undefined when no workflow exists. */
-  const change = (apply: (state: WorkflowState) => Partial<WorkflowState>) =>
-    stateStore.mutate((state) => ({ ...state, ...apply(state), updatedAt: new Date().toISOString() }))
+interface Refusal {
+  readonly recorded: false
+  readonly reason: string
+}
 
-  const recordEvidence = async (evidence: VerificationEvidence) => {
-    const state = await change((current) => ({ verification: [...current.verification, evidence] }))
-    return state === undefined ? { recorded: false, reason: noWorkflow } : { recorded: true, evidenceId: evidence.id }
+/**
+ * The workflow tools the model uses to keep the project-local workflow record and run the gate.
+ * Only the session that started the workflow, and the sessions it spawned, may change its record.
+ */
+export function createWorkflowTools(config: OpenUltraCodeOptions, stateStore: WorkflowStateStore, sessions: SessionTree): ToolDefinition[] {
+  /**
+   * Applies a change to the session's workflow and stamps it. Refuses when the project has no
+   * workflow record, or when the record belongs to another session and is not being adopted.
+   */
+  const change = async (
+    context: ToolExecutionContext,
+    apply: (state: WorkflowState) => Partial<WorkflowState>,
+    adopt = false
+  ): Promise<WorkflowState | Refusal> => {
+    const root = await sessions.root(context.sessionID)
+    let changed: WorkflowState | undefined
+    const current = await stateStore.mutate((state) => {
+      if (!adopt && !ownsWorkflow(state, root)) return undefined
+      changed = {
+        ...state,
+        ...apply(state),
+        ...(adopt ? { sessionId: root ?? context.sessionID } : {}),
+        updatedAt: new Date().toISOString()
+      }
+      return changed
+    })
+    return changed ?? { recorded: false, reason: current === undefined ? noWorkflow : anotherSessionsWorkflow }
+  }
+
+  const recordEvidence = async (context: ToolExecutionContext, evidence: VerificationEvidence) => {
+    const state = await change(context, (current) => ({ verification: [...current.verification, evidence] }))
+    return isRefusal(state) ? state : { recorded: true, evidenceId: evidence.id }
   }
 
   return [
@@ -39,7 +71,7 @@ export function createWorkflowTools(config: OpenUltraCodeOptions, stateStore: Wo
       "open_ultracode_status",
       "Read the current OpenUltraCode workflow status from project-local state.",
       objectSchema({}),
-      async () => {
+      async (_input, context) => {
         const { state, degradations: loadNotices } = await stateStore.load()
         const notices = [...(state?.degradations ?? []), ...loadNotices]
         const degradation = {
@@ -56,6 +88,7 @@ export function createWorkflowTools(config: OpenUltraCodeOptions, stateStore: Wo
         if (state === undefined) return { active: false, ...degradation, openFindings: [], verification: [] }
         return {
           active: isActiveWorkflow(state),
+          ownedByThisSession: ownsWorkflow(state, await sessions.root(context.sessionID)),
           mode: state.mode,
           phase: state.phase,
           ...(state.goal === undefined ? {} : { goal: state.goal }),
@@ -72,7 +105,7 @@ export function createWorkflowTools(config: OpenUltraCodeOptions, stateStore: Wo
       "Record the OpenUltraCode intake (goal, constraints, assumptions, acceptance criteria) and move the workflow to its next phase. " +
         "Use it after intake, when criteria change, to resume a blocked workflow once the blocker is resolved, and to mark the workflow completed.",
       recordIntakeInputSchema(),
-      async (input) => {
+      async (input, context) => {
         const record = readRecord(input)
         const intake = {
           ...readOptional(record, "goal", readText),
@@ -81,9 +114,9 @@ export function createWorkflowTools(config: OpenUltraCodeOptions, stateStore: Wo
           ...readOptional(record, "phase", (value, name) => readOneOf(value, settablePhases, name))
         }
         const criteria = record.criteria === undefined ? [] : readCriteria(record.criteria)
-        const state = await change((current) => ({ ...intake, criteria: upsert(current.criteria, criteria) }))
-        return state === undefined
-          ? { recorded: false, reason: noWorkflow }
+        const state = await change(context, (current) => ({ ...intake, criteria: upsert(current.criteria, criteria) }), record.adopt === true)
+        return isRefusal(state)
+          ? state
           : { recorded: true, phase: state.phase, criteriaIds: state.criteria.map((criterion) => criterion.id) }
       }
     ),
@@ -93,14 +126,14 @@ export function createWorkflowTools(config: OpenUltraCodeOptions, stateStore: Wo
       "Record OpenUltraCode verification evidence in project-local workflow state. " +
         "Recording a check again under the same id replaces its earlier result.",
       verificationInputSchema(),
-      async (input) => recordEvidence(readEvidence(readRecord(input)))
+      async (input, context) => recordEvidence(context, readEvidence(readRecord(input)))
     ),
 
     tool(
       "open_ultracode_record_blocked_check",
       "Record an OpenUltraCode verification check that could not run.",
       blockedCheckInputSchema(),
-      async (input) => recordEvidence(readEvidence({ ...readRecord(input), result: "blocked" }))
+      async (input, context) => recordEvidence(context, readEvidence({ ...readRecord(input), result: "blocked" }))
     ),
 
     tool(
@@ -108,11 +141,11 @@ export function createWorkflowTools(config: OpenUltraCodeOptions, stateStore: Wo
       "Record an adversarial review finding, or reconcile one: send an existing id with only the fields that change, " +
         "for example its disposition. Open findings of high or medium severity hold back completion.",
       recordFindingInputSchema(),
-      async (input) => {
+      async (input, context) => {
         const record = readRecord(input)
         const id = readText(record.id, "id")
         let finding: Finding | undefined
-        const state = await change((current) => {
+        const state = await change(context, (current) => {
           // Validate the merged finding so an update may name only the fields that change.
           const merged: Record<string, unknown> = { ...current.findings.find((existing) => existing.id === id), ...record }
           // A reason belongs to the disposition it was given for; a new disposition starts without one.
@@ -120,9 +153,7 @@ export function createWorkflowTools(config: OpenUltraCodeOptions, stateStore: Wo
           finding = readFinding(merged)
           return { findings: upsert(current.findings, [finding]) }
         })
-        return state === undefined || finding === undefined
-          ? { recorded: false, reason: noWorkflow }
-          : { recorded: true, findingId: id, open: isOpenFinding(finding) }
+        return isRefusal(state) || finding === undefined ? state : { recorded: true, findingId: id, open: isOpenFinding(finding) }
       }
     ),
 
@@ -132,7 +163,7 @@ export function createWorkflowTools(config: OpenUltraCodeOptions, stateStore: Wo
       objectSchema({
         researchOnly: { type: "boolean", description: "The workflow produced findings or a recommendation, not a change; report research-only instead of verified." }
       }),
-      async (input) => {
+      async (input, context) => {
         const researchOnly = isRecord(input) && input.researchOnly === true
         const { verificationGate: policy, adversarialReview: reviewPolicy } = config
         const report = (state?: WorkflowState) =>
@@ -145,25 +176,33 @@ export function createWorkflowTools(config: OpenUltraCodeOptions, stateStore: Wo
             assumptions: state?.assumptions ?? [],
             researchOnly: researchOnly || (state !== undefined && isResearchMode(state.mode))
           })
-        const state = await change((current) => {
+        const state = await change(context, (current) => {
           const completion = report(current)
-          // A verified or research-only report ends the workflow; any other status leaves work to do.
-          const finished = completion.status === "verified" || completion.status === "research-only"
-          return { completion, ...(finished ? { phase: "completed" as const } : {}) }
+          return { completion, ...(endsWorkflow(completion.status, policy) ? { phase: "completed" as const } : {}) }
         })
-        return state?.completion ?? report()
+        // Without a workflow of its own the session gets the empty report: nothing was verified.
+        return isRefusal(state) ? report() : (state.completion ?? report())
       }
     )
   ]
 }
 
-function tool(name: string, description: string, input: JsonSchema, run: (input: unknown) => Promise<unknown>): ToolDefinition {
+function tool(
+  name: string,
+  description: string,
+  input: JsonSchema,
+  run: (input: unknown, context: ToolExecutionContext) => Promise<unknown>
+): ToolDefinition {
   return {
     name,
     description,
     input,
-    execute: async (rawInput) => ({ content: JSON.stringify(await run(rawInput), null, 2) })
+    execute: async (rawInput, context) => ({ content: JSON.stringify(await run(rawInput, context), null, 2) })
   }
+}
+
+function isRefusal(result: WorkflowState | Refusal): result is Refusal {
+  return "recorded" in result
 }
 
 /** Adds or replaces items by id, keeping the position of an item that is replaced. */
@@ -177,7 +216,7 @@ function upsert<T extends { readonly id: string }>(existing: readonly T[], updat
 const settablePhases = workflowPhases.filter((phase): phase is Exclude<WorkflowPhase, "blocked"> => phase !== "blocked")
 
 function readCriteria(value: unknown): readonly AcceptanceCriterion[] {
-  if (!Array.isArray(value)) throw new TypeError("criteria must be an array")
+  if (!Array.isArray(value)) throw new InvalidInputError("criteria must be an array")
   return value.map((item, index) => {
     const name = `criteria[${index}]`
     const record = readRecord(item, name)
@@ -246,7 +285,8 @@ function recordIntakeInputSchema(): JsonSchema {
       description: "Acceptance criteria. Existing criteria with the same id are replaced and reset to pending.",
       items: objectSchema({ id: text, text, source: { ...text, enum: acceptanceCriterionSources } }, ["id", "text"])
     },
-    phase: { ...text, enum: settablePhases, description: "The phase the workflow moves to." }
+    phase: { ...text, enum: settablePhases, description: "The phase the workflow moves to." },
+    adopt: { type: "boolean", description: "Continue a workflow record that another session started, making this session its owner." }
   })
 }
 

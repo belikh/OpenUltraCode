@@ -72,15 +72,16 @@ The report's `unresolvedRisks` list says what stands in the way.
 ### When a workflow record starts and ends
 
 - A command in a new session, or in a different mode, starts an empty record.
-- A second command in the same session and the same mode continues the existing record, with its criteria and evidence.
+- A second command in the same session and the same mode continues the existing record, with its criteria and evidence. `/ultracode-verify` continues whatever workflow the session has open and keeps its mode.
 - A `verified` or `research-only` completion report ends the workflow. So does setting the phase to `completed`. The next command then starts an empty record.
-- The record tools write to whatever record the project holds. They do not check that it belongs to your task.
+- The record belongs to the session that ran the command and to its subagents. The record tools refuse any other session.
 
 So:
 
-1. At intake, call `open_ultracode_status`. If the goal or the evidence belongs to a different task, tell the user and do not record into it. Set its phase to `completed` with `open_ultracode_record_intake` and ask the user to run the command again.
+1. At intake, call `open_ultracode_status`. If the goal belongs to a different task of this session, tell the user. Set its phase to `completed` with `open_ultracode_record_intake` and ask the user to run the command again.
 2. If you stop a workflow that is not verified, and the user is moving on, set the phase to `completed`.
-3. If a record tool answers `recorded: false`, no workflow has been started. Keep the same information in your replies and say that the workflow record is degraded.
+3. If a record tool answers `recorded: false`, read the reason. With no workflow, or with a record that belongs to another session, keep the same information in your replies and say that the workflow record is degraded. Do not retry the call.
+4. Take over another session's record only when the user asks you to continue that work: call `open_ultracode_record_intake` with `adopt: true`.
 
 ### Recording intake
 
@@ -105,7 +106,7 @@ Record each adversarial finding with `open_ultracode_record_finding`: an ID, sev
 
 ### Blocked phase and notices
 
-The plugin sets the phase to `blocked` when the user rejects a permission request, a rule denies a tool call, or an `open_ultracode_*` tool call fails. Once the blocker is resolved, resume by setting a phase with `open_ultracode_record_intake`. Other tool errors only add a notice. A notice reports a reduced capability, not a failure; carry on and list it in the final report.
+The plugin sets the phase to `blocked` when the user rejects a permission request, a rule denies a tool call, or an `open_ultracode_*` tool call fails. A call that fails with `Invalid input:` does not block; correct the input and send it again. Once a blocker is resolved, resume by setting a phase with `open_ultracode_record_intake`. Other tool errors only add a notice. A notice reports a reduced capability, not a failure; carry on and list it in the final report.
 
 ## Phases
 
