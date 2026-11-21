@@ -12,9 +12,9 @@ There is no proxy process in this package. Requests continue through opencode's 
 
 ## High-Effort Behavior
 
-High-effort support is best effort. The plugin can adjust only supported request fields that already exist in the provider request object, such as compatible output-token or reasoning-effort fields.
+High-effort support is best effort and applies only while a workflow is in progress. The plugin sets the output-token budget, capped at the selected model's output limit, and the strongest reasoning effort the model itself declares that does not exceed the configured level.
 
-If no supported field exists, the request is left unchanged and a degradation notice can be recorded in workflow state. The workflow still continues with visible discipline: assumptions, review, reconciliation, and verification.
+A model that declares no reasoning variants, or one opencode does not list, gets no reasoning effort. The workflow still continues with visible discipline: assumptions, review, reconciliation, and verification.
 
 ## Hidden Reasoning
 
@@ -22,10 +22,10 @@ OpenUltraCode does not expose, promise, or depend on hidden reasoning. Documenta
 
 ## Provider Limits
 
-OpenUltraCode cannot raise provider limits, change provider policies, or make unsupported controls available. If a provider ignores or lacks a high-effort control, the correct behavior is visible degradation, not a stronger claim.
+OpenUltraCode cannot raise provider limits, change provider policies, or make unsupported controls available. If a provider ignores or lacks a high-effort control, the request goes out without it; OpenUltraCode makes no stronger claim.
 
 ## Degradation
 
-A degradation is a user-facing notice that a requested workflow capability is unavailable or reduced. Examples include unsupported high-effort controls, unavailable multi-agent execution, corrupt local workflow state, permission denials, and failed tool phases.
+A degradation is a user-facing notice that a requested workflow capability is unavailable or reduced. Examples include an unavailable fusion model, corrupt local workflow state, permission denials, tool errors, and failures of the workflow's own tools.
 
 Degradation is not failure by itself. It tells the user which capability changed, what confidence was affected, and what safe next action is available.

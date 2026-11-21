@@ -43,12 +43,12 @@ Each agent inherits the active selected model. Role files avoid `model:` frontma
 
 ## Adversarial Review
 
-Adversarial review is not general criticism. Findings must carry severity, confidence, affected requirement or assumption, evidence, and disposition. High- and medium-severity unresolved findings can block or warn depending on the configured review policy.
+Adversarial review is not general criticism. Findings must carry severity, confidence, affected requirement or assumption, evidence, and disposition. Findings are recorded with `open_ultracode_record_finding` and stay open until they are accepted (and addressed) or rejected with a reason. An open finding of high or medium severity blocks a verified completion report under the `required` review policy and makes it partial under `recommended`.
 
 ## Verification Gate
 
-The verification gate compares acceptance criteria with fresh evidence. Completion is verified only when the evidence matches the claim. Missing, stale, skipped, unrelated, failed, or blocked checks do not support a completion claim.
+The verification gate compares acceptance criteria with fresh evidence. Completion is verified only when the evidence matches the claim. Missing, stale, skipped, unrelated, failed, or blocked checks do not support a completion claim. A check that is run again under the same ID replaces its earlier result, so a fixed failure no longer holds the gate.
 
 ## Single-Session Fallback
 
-When subagents or multi-agent execution are unavailable, OpenUltraCode uses single-session fallback. The same coordinator, planner, implementer, adversary, reconciler, verifier, and researcher roles run sequentially in the current session, and the fallback is recorded as a degradation when it reduces confidence.
+When subagents or multi-agent execution are unavailable, OpenUltraCode uses single-session fallback. The same coordinator, planner, implementer, adversary, reconciler, verifier, and researcher roles run sequentially in the current session, and the final report says that the review was not independent.

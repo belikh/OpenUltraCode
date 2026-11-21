@@ -2,6 +2,8 @@ import { access, readFile, rename, unlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
+import { isRecord } from "./input.js"
+
 const fusionAgents = {
   panelA: "ultracode-fusion-panel-a.md",
   panelB: "ultracode-fusion-panel-b.md",
@@ -317,8 +319,4 @@ function setFusionAgentOptions(content: string, model: string, fileName: string)
   )
 
   return `${document.opening}${updated}${document.newline}---${document.remainder}`
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

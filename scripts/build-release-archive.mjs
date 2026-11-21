@@ -14,7 +14,6 @@ import { fileURLToPath } from "node:url"
 export const releaseFiles = [
   "assets/agents",
   ".opencode/commands",
-  ".opencode/lib",
   ".opencode/plugins",
   ".opencode/skills",
   "src",

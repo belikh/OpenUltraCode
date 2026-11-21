@@ -8,7 +8,7 @@ After changing plugin files, commands, skills, agents, or opencode configuration
 
 The plugin entry point lives at `.opencode/plugins/open-ultracode/index.ts`. OpenCode 2 loads local plugins from directories and expects a default export with an `id` and a `setup(ctx)` function. The plugin validates options, registers workflow tools, and observes safe hook points through the OpenCode 2 plugin context (`session`, `permission`, `tool`, and `event` domains). `tests/plugin-contract.test.ts` type-checks this against the real `@opencode/plugin` API.
 
-Running an OpenUltraCode command (for example `/ultracode`) starts a project-local workflow record in the project root, even when opencode runs in a subdirectory. The model keeps it current with `open_ultracode_record_intake` (goal, criteria, phase), `open_ultracode_record_verification`, `open_ultracode_record_blocked_check`, `open_ultracode_status`, and `open_ultracode_completion_report`. Hook failures inside the plugin are logged and never fail your prompt, tool call, permission check, or compaction. If the plugin is registered twice (for example globally and in the project), the second instance stays inactive.
+Running an OpenUltraCode command (for example `/ultracode`) starts a project-local workflow record in the project root, even when opencode runs in a subdirectory. The model keeps it current with `open_ultracode_record_intake` (goal, criteria, phase), `open_ultracode_record_finding`, `open_ultracode_record_verification`, `open_ultracode_record_blocked_check`, `open_ultracode_status`, and `open_ultracode_completion_report`. Hook failures inside the plugin are logged and never fail your prompt, tool call, permission check, or compaction. If the plugin is registered twice (for example globally and in the project), the second instance stays inactive.
 
 Example local plugin entry in opencode configuration:
 
@@ -30,13 +30,12 @@ Example local plugin entry in opencode configuration:
 ## Options
 
 - `enabled`: turns OpenUltraCode plugin behavior on or off. Disabled mode returns no operational hooks.
-- `verificationGate`: `strict`, `advisory`, or `disabled`.
-- `adversarialReview`: `required`, `recommended`, or `disabled`.
-- `highEffort.enabled`: enables best-effort request hints on the OpenCode 2 `context` hook.
+- `verificationGate`: `strict`, `advisory`, or `disabled`. Under `strict` and `advisory` the completion report is `verified` only when every acceptance criterion has passing evidence and no check failed, was blocked, or was not run; the two differ only in the policy name the report carries. Under `disabled` the report is never `verified`.
+- `adversarialReview`: `required`, `recommended`, or `disabled`. An open finding of high or medium severity makes the completion report `blocked` under `required` and `partial` under `recommended`. Under `disabled` findings are listed and do not affect the status.
+- `highEffort.enabled`: enables best-effort request hints on the OpenCode 2 `context` hook. The hints apply only while a workflow is in progress in the project; other requests are left unchanged.
 - `highEffort.effort`: `medium`, `high`, or `xhigh`; mapped to the semantic `reasoningEffort` request option. The plugin reads the selected model's variants from opencode's model list (`ctx.model.list()`) and sends the strongest declared variant effort that does not exceed this level, for example `high` for a model declaring `low`, `high`, `max` when `xhigh` is configured. Models that declare no variants, and models opencode does not list, get no reasoning effort: providers reject undeclared values (Mistral answers `400 Bad Request`). A stronger effort that opencode already set, for example through a selected variant, is kept.
 - `highEffort.outputTokens`: desired output-token budget, applied as the semantic `maxTokens` request option and capped at the selected model's output limit (`limit.output` from opencode's model list). When opencode does not know the model, the configured value is used.
 - `state.directory`: project-relative workflow state directory.
-- `notices.showDegradation`: controls whether visible degradation notices are recorded when supported.
 
 ## Fusion Models
 
@@ -52,7 +51,9 @@ Invalid option shapes fail during plugin startup with actionable errors.
 
 Workflow state is project-local. By default, OpenUltraCode stores minimal state under `.opencode/open-ultracode/state/workflow-state.json`.
 
-The state store rejects absolute paths, parent-directory escapes, backslash paths, and symlinked state path components. It is intended for workflow continuity, not transcripts or unrelated project data.
+The state store rejects absolute paths, parent-directory escapes, backslash paths, and symlinked state path components. It is intended for workflow continuity, not transcripts or unrelated project data. The state directory gets a `.gitignore` that keeps it out of version control; an existing one is left as it is.
+
+A check that is recorded again under the same ID replaces its earlier result in the gate, the status, and the compaction summary; the file keeps every record. A finding is open until it is recorded as `accepted` or as `rejected` with a reason. A workflow ends when its completion report is `verified` or `research-only`, or when its phase is set to `completed`; the next command then starts a new record. A state file that lacks the expected fields is moved to `workflow-state.json.bak` and ignored.
 
 Sensitive or security-relevant findings should remain project-local. Do not publish, share, or externalize those findings unless the user explicitly requests it.
 
@@ -84,6 +85,6 @@ Removal deletes the copied skill and exactly the commands and agents OpenUltraCo
 - Commands or agents missing: restart opencode and confirm the installer copied the commands, agents, and skill into `~/.config/opencode/` (`commands/`, `agents/`, `skills/open-ultracode/SKILL.md`). In a checkout the shipped agents are in `assets/agents`.
 - Plugin not active: confirm the `plugins` array contains `{ "package": ".../.opencode/plugins/open-ultracode" }` (a directory, not a single `.ts` file) and `enabled` is not false.
 - `Plugin failed to load` with a path to a missing `open-ultracode.ts` or an old version directory: an older release left an entry in `opencode.json` or `opencode.jsonc`. Re-run the installer; it replaces stale OpenUltraCode entries in both files with one current entry.
-- High-effort unavailable: check workflow status for a degradation notice and continue with visible review and verification.
-- Completion remains partial: record verification evidence, then run the completion report tool or `/ultracode-verify`.
+- High-effort hints not applied: they apply only while a workflow is in progress, and only as far as the selected model allows. A model that declares no variants gets no reasoning effort.
+- Completion remains partial or blocked: check the report's `unresolvedRisks`. Record passing evidence for each criterion, rerun failed checks under the same ID, and reconcile open findings, then run the completion report tool or `/ultracode-verify`.
 - Permission blocked: adjust opencode permissions intentionally or choose a permitted path; OpenUltraCode will not retry denied operations.

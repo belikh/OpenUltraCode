@@ -149,6 +149,13 @@ async function setupPlugin(directory: string, options: unknown, sessionDirectory
   return ctx
 }
 
+/** A plugin for a project that already has a workflow in progress. */
+async function setupPluginWithWorkflow(options: unknown): Promise<FakeContext> {
+  const projectRoot = await createProjectRoot()
+  await createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } }).update(createState())
+  return setupPlugin(projectRoot, options)
+}
+
 const toolContext = {
   sessionID: "session-1",
   agent: "build",
@@ -217,6 +224,7 @@ describe("OpenUltraCode OpenCode 2 plugin entry point", () => {
         "open_ultracode_configure_fusion",
         "open_ultracode_list_models",
         "open_ultracode_record_blocked_check",
+        "open_ultracode_record_finding",
         "open_ultracode_record_intake",
         "open_ultracode_record_verification",
         "open_ultracode_status"
@@ -320,8 +328,8 @@ describe("OpenUltraCode OpenCode 2 plugin entry point", () => {
     assert.equal(event.prompt.text, "Workflow mode: ultrathink\n\njust think")
   })
 
-  it("applies semantic high-effort request options on model requests", async () => {
-    const ctx = await setupPlugin(await createProjectRoot(), {
+  it("applies semantic high-effort request options on model requests during a workflow", async () => {
+    const ctx = await setupPluginWithWorkflow({
       enabled: true,
       highEffort: { enabled: true, effort: "xhigh", outputTokens: 128000 }
     })
@@ -335,8 +343,7 @@ describe("OpenUltraCode OpenCode 2 plugin entry point", () => {
 
   it("never sends reasoning effort xhigh, which Mistral rejects with 400 Bad Request", async () => {
     // A model declaring low/high/max succeeds with reasoning_effort "high"; providers reject "xhigh".
-    // succeeded with reasoning_effort "high" and failed with "xhigh".
-    const ctx = await setupPlugin(await createProjectRoot(), { enabled: true })
+    const ctx = await setupPluginWithWorkflow({ enabled: true })
     const event = { options: { maxTokens: 256000 }, model: asEvent(models.withMax) } as unknown as SessionContextEvent
     const userChoice = { options: { reasoningEffort: "max" }, model: asEvent(models.withMax) } as unknown as SessionContextEvent
 
@@ -349,7 +356,7 @@ describe("OpenUltraCode OpenCode 2 plugin entry point", () => {
   })
 
   it("clamps high-effort output tokens and effort to what the selected model supports", async () => {
-    const ctx = await setupPlugin(await createProjectRoot(), {
+    const ctx = await setupPluginWithWorkflow({
       enabled: true,
       highEffort: { enabled: true, effort: "xhigh", outputTokens: 128000 }
     })
@@ -365,12 +372,28 @@ describe("OpenUltraCode OpenCode 2 plugin entry point", () => {
   })
 
   it("sends no reasoning effort to a model that declares no variants", async () => {
-    const ctx = await setupPlugin(await createProjectRoot(), { enabled: true })
+    const ctx = await setupPluginWithWorkflow({ enabled: true })
     const event = { options: { maxTokens: 256000 }, model: asEvent(models.noVariants) } as unknown as SessionContextEvent
 
     await getSessionHook(ctx, "context")(event as never)
 
     assert.deepEqual(event.options, { maxTokens: 256000 })
+  })
+
+  it("leaves ordinary requests alone when no workflow is in progress", async () => {
+    const projectRoot = await createProjectRoot()
+    const store = createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } })
+    const ctx = await setupPlugin(projectRoot, { enabled: true })
+    const request = () => ({ options: { temperature: 0.2 }, model: asEvent(models.withMax) }) as unknown as SessionContextEvent
+
+    const withoutWorkflow = request()
+    await getSessionHook(ctx, "context")(withoutWorkflow as never)
+    assert.deepEqual(withoutWorkflow.options, { temperature: 0.2 })
+
+    await store.update({ ...createState(), phase: "completed" })
+    const afterCompletion = request()
+    await getSessionHook(ctx, "context")(afterCompletion as never)
+    assert.deepEqual(afterCompletion.options, { temperature: 0.2 })
   })
 
   it("does not mutate request options when high-effort mode is disabled", async () => {
@@ -587,13 +610,13 @@ describe("OpenUltraCode OpenCode 2 plugin entry point", () => {
     const store = createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } })
     await store.update(withoutCompletion({
       ...createState(),
+      findings: [],
       criteria: [
         {
           id: "AC-1",
           text: "Completion evidence maps to the criterion.",
           source: "spec",
-          status: "pending",
-          requirementId: "8.5"
+          status: "pending"
         }
       ],
       verification: [
@@ -615,6 +638,96 @@ describe("OpenUltraCode OpenCode 2 plugin entry point", () => {
     assert.equal(report.status, "verified")
     assert.equal(loaded.state?.completion?.status, "verified")
     assert.deepEqual(loaded.state?.completion?.verificationIds, ["VE-1"])
+    // A verified report ends the workflow, so the next command starts clean.
+    assert.equal(loaded.state?.phase, "completed")
+  })
+
+  it("holds back completion until every recorded finding is reconciled", async () => {
+    const projectRoot = await createProjectRoot()
+    const store = createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } })
+    await store.update(createGateState("pass"))
+    const ctx = await setupPlugin(projectRoot, { enabled: true })
+    const report = async () => (await executeTool(ctx, "open_ultracode_completion_report", {}) as { status: string; summary: string })
+
+    const recorded = await executeTool(ctx, "open_ultracode_record_finding", {
+      id: "F-9",
+      severity: "high",
+      confidence: "medium",
+      title: "The test never exercises the changed branch",
+      evidence: ["tests/gate.test.ts:40 only covers the old path."],
+      impact: "The change could be broken while the gate reports verified.",
+      recommendation: "Add a test for the new branch."
+    })
+    assert.deepEqual(recorded, { recorded: true, findingId: "F-9", open: true })
+    assert.deepEqual((await executeTool(ctx, "open_ultracode_status", {}) as { openFindings: string[] }).openFindings, ["F-9"])
+
+    const blocked = await report()
+    assert.equal(blocked.status, "blocked")
+    assert.match(blocked.summary, /open findings: F-9/)
+    assert.equal((await store.load()).state?.phase, "verification")
+
+    // Rejecting a finding needs a reason; the finding stays open when none is given.
+    await assert.rejects(
+      () => executeTool(ctx, "open_ultracode_record_finding", { id: "F-9", disposition: "rejected" }),
+      /dispositionReason must be a non-empty string/
+    )
+    assert.equal((await report()).status, "blocked")
+
+    // Reconciling names only the fields that change.
+    const reconciled = await executeTool(ctx, "open_ultracode_record_finding", { id: "F-9", disposition: "accepted", dispositionReason: "Added the missing test." })
+    assert.deepEqual(reconciled, { recorded: true, findingId: "F-9", open: false })
+    assert.equal((await store.load()).state?.findings[0]?.title, "The test never exercises the changed branch")
+
+    // A new disposition does not inherit the reason given for the previous one.
+    await executeTool(ctx, "open_ultracode_record_finding", { id: "F-9", disposition: "deferred" })
+    assert.equal((await store.load()).state?.findings[0]?.dispositionReason, undefined)
+    assert.equal((await report()).status, "blocked")
+
+    await executeTool(ctx, "open_ultracode_record_finding", { id: "F-9", disposition: "accepted", dispositionReason: "Added the missing test." })
+    assert.equal((await report()).status, "verified")
+  })
+
+  it("lists findings without gating on them when adversarial review is disabled", async () => {
+    const projectRoot = await createProjectRoot()
+    const store = createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } })
+    await store.update({ ...createGateState("pass"), findings: createState().findings })
+    const ctx = await setupPlugin(projectRoot, { enabled: true, adversarialReview: "disabled" })
+
+    const report = await executeTool(ctx, "open_ultracode_completion_report", {}) as { status: string; findingIds: string[] }
+
+    assert.equal(report.status, "verified")
+    assert.deepEqual(report.findingIds, ["F-1", "F-2"])
+  })
+
+  it("lets a rerun of a check replace its earlier failure", async () => {
+    const projectRoot = await createProjectRoot()
+    const store = createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } })
+    await store.update(createGateState("fail"))
+    const ctx = await setupPlugin(projectRoot, { enabled: true })
+    assert.equal((await executeTool(ctx, "open_ultracode_completion_report", {}) as { status: string }).status, "failed")
+
+    await executeTool(ctx, "open_ultracode_record_verification", {
+      id: "VE-gate", kind: "test", result: "pass", summary: "Gate check passes after the fix.", criteriaIds: ["AC-1"]
+    })
+
+    assert.deepEqual((await executeTool(ctx, "open_ultracode_status", {}) as { verification: string[] }).verification, ["VE-gate:pass"])
+    assert.equal((await executeTool(ctx, "open_ultracode_completion_report", {}) as { status: string }).status, "verified")
+    // The earlier failure stays in the record.
+    assert.deepEqual((await store.load()).state?.verification.map((evidence) => evidence.result), ["fail", "pass"])
+  })
+
+  it("records nothing and says so when no workflow has been started", async () => {
+    const ctx = await setupPlugin(await createProjectRoot(), { enabled: true })
+    const finding = await executeTool(ctx, "open_ultracode_record_finding", {
+      id: "F-1", severity: "low", confidence: "low", title: "t", evidence: ["e"], impact: "i", recommendation: "r"
+    }) as { recorded: boolean; reason: string }
+    const evidence = await executeTool(ctx, "open_ultracode_record_verification", {
+      id: "VE-1", kind: "test", result: "pass", summary: "s", criteriaIds: []
+    }) as { recorded: boolean }
+
+    assert.equal(finding.recorded, false)
+    assert.match(finding.reason, /Start one with an OpenUltraCode command/)
+    assert.equal(evidence.recorded, false)
   })
 
   it("uses the same tool completion path for verified, partial, blocked, failed, and research-only states", async () => {
@@ -681,13 +794,13 @@ function createGateState(result: "pass" | "fail" | "not-run" | "blocked"): Workf
 
   return withoutCompletion({
     ...state,
+    findings: [],
     criteria: [
       {
         id: "AC-1",
         text: "Gate status is classified consistently.",
         source: "spec",
-        status: "pending",
-        requirementId: "8.4"
+        status: "pending"
       }
     ],
     verification: [evidence]
@@ -718,8 +831,7 @@ function createState(): WorkflowState {
         id: "AC-1",
         text: "Compaction context includes active phase.",
         source: "spec",
-        status: "verified",
-        requirementId: "2.3"
+        status: "verified"
       }
     ],
     findings: [
@@ -841,6 +953,21 @@ describe("OpenUltraCode workflow lifecycle in OpenCode 2", () => {
     const other = await commandPrompt("ultracode-debug.md", "other session")
     await getSessionHook(ctx, "prompt")({ ...other, sessionID: "session-2" } as never)
     assert.equal((await executeTool(ctx, "open_ultracode_status", {}) as { goal: string }).goal, "other session")
+  })
+
+  it("ends the workflow on a verified report, so the next command starts clean", async () => {
+    const ctx = await setupPlugin(await createProjectRoot(), { enabled: true })
+    await getSessionHook(ctx, "prompt")(await commandPrompt("ultracode.md", "first task") as never)
+    await executeTool(ctx, "open_ultracode_record_intake", { criteria: [{ id: "AC-1", text: "first task works" }] })
+    await executeTool(ctx, "open_ultracode_record_verification", { id: "VE-1", kind: "test", result: "pass", summary: "passes", criteriaIds: ["AC-1"] })
+    assert.equal((await executeTool(ctx, "open_ultracode_completion_report", {}) as { status: string }).status, "verified")
+
+    const finished = await executeTool(ctx, "open_ultracode_status", {}) as { active: boolean; phase: string }
+    assert.deepEqual([finished.active, finished.phase], [false, "completed"])
+
+    await getSessionHook(ctx, "prompt")(await commandPrompt("ultracode.md", "second task") as never)
+    const next = await executeTool(ctx, "open_ultracode_status", {}) as { active: boolean; goal: string; verification: string[] }
+    assert.deepEqual([next.active, next.goal, next.verification], [true, "second task", []])
   })
 
   it("stores state in the project root when opencode runs in a subdirectory", async () => {

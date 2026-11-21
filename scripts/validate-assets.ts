@@ -30,8 +30,6 @@ const requiredScaffoldPaths = [
   ".opencode/plugins",
   ".opencode/plugins/open-ultracode",
   ".opencode/plugins/open-ultracode/index.ts",
-  ".opencode/lib",
-  ".opencode/lib/fusion-config.ts",
   ".opencode/skills/open-ultracode",
   "assets/agents",
   ".opencode/commands",

@@ -51,18 +51,32 @@ describe("workflow state store", () => {
     assert.equal(existsSync(join(projectRoot, stateFile)), true)
   })
 
-  it("clears state safely when present or missing", async () => {
+  it("keeps workflow state out of the project's version control", async () => {
     const projectRoot = await createProjectRoot()
     const store = createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } })
+    const ignoreFile = join(projectRoot, stateDirectory, ".gitignore")
 
-    await store.clear()
     await store.update(createState())
-    assert.equal(existsSync(join(projectRoot, stateFile)), true)
+    assert.equal(await readFile(ignoreFile, "utf8"), "*\n")
 
-    await store.clear()
-    await store.clear()
+    // A user's own ignore rules are never overwritten.
+    await writeFile(ignoreFile, "workflow-state.json\n", "utf8")
+    await store.update(createState())
+    assert.equal(await readFile(ignoreFile, "utf8"), "workflow-state.json\n")
+  })
 
-    assert.equal(existsSync(join(projectRoot, stateFile)), false)
+  it("treats a state file without the lists every reader relies on as corrupt", async () => {
+    const projectRoot = await createProjectRoot()
+    await mkdir(join(projectRoot, stateDirectory), { recursive: true })
+    const incomplete = { schemaVersion: 1, updatedAt: "2026-06-15T19:00:00.000Z", state: { schemaVersion: 1, mode: "build", phase: "intake" } }
+    await writeFile(join(projectRoot, stateFile), JSON.stringify(incomplete), "utf8")
+    const store = createWorkflowStateStore(projectRoot, { state: { directory: stateDirectory } })
+
+    const loaded = await store.load()
+
+    assert.equal(loaded.state, undefined)
+    assert.equal(loaded.degradations[0]?.id, "workflow-state-corrupt")
+    assert.equal(existsSync(join(projectRoot, `${stateFile}.bak`)), true)
   })
 
   it("recovers corrupt state with a visible degradation notice and backup", async () => {
@@ -160,8 +174,7 @@ function createState(): WorkflowState {
         id: "AC-1",
         text: "State can be loaded after update.",
         source: "spec",
-        status: "verified",
-        requirementId: "2.3"
+        status: "verified"
       }
     ],
     findings: [
@@ -205,8 +218,7 @@ function createState(): WorkflowState {
           id: "AC-1",
           text: "State can be loaded after update.",
           source: "spec",
-          status: "verified",
-          requirementId: "2.3"
+          status: "verified"
         }
       ],
       unresolvedRisks: [],

@@ -14,8 +14,6 @@ const requiredScaffoldPaths = [
   ".opencode/plugins",
   ".opencode/plugins/open-ultracode",
   ".opencode/plugins/open-ultracode/index.ts",
-  ".opencode/lib",
-  ".opencode/lib/fusion-config.ts",
   ".opencode/skills/open-ultracode",
   "assets/agents",
   ".opencode/commands",
@@ -231,7 +229,6 @@ function createAssetFixture(): string {
     "src",
     ".opencode/plugins",
     ".opencode/plugins/open-ultracode",
-    ".opencode/lib",
     ".opencode/skills/open-ultracode",
     "assets/agents",
     ".opencode/commands",
@@ -291,7 +288,6 @@ updates:
   writeFileSync(join(root, ".github/workflows/ci.yml"), "on: [push]\n")
 
   writeFileSync(join(root, ".opencode/plugins/open-ultracode/index.ts"), "export { default } from \"../../../src/plugin.js\"\n")
-  writeFileSync(join(root, ".opencode/lib/fusion-config.ts"), "export async function configureFusionModels() {}\n")
   writeFileSync(join(root, ".opencode/skills/open-ultracode/SKILL.md"), skillAsset())
   for (const command of [
     ["ultracode.md", "comprehensive"],

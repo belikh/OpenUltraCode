@@ -5,7 +5,6 @@ import { join } from "node:path"
 
 import {
   applyHighEffortRequestBehavior,
-  evaluateAdversarialReview,
   evaluateCompletionGate,
   type AcceptanceCriterion,
   type Finding,
@@ -47,14 +46,16 @@ describe("OpenUltraCode end-to-end readiness", () => {
   })
 
   it("handles adversarial and strict-gate readiness without false completion", () => {
-    const adversarial = evaluateAdversarialReview({
-      policy: "required",
+    const adversarial = evaluateCompletionGate({
+      policy: "strict",
+      reviewPolicy: "required",
+      criteria: [criterion()],
+      evidence: [{ id: "VE-ready", kind: "test", result: "pass", summary: "Readiness check passed.", criteriaIds: ["AC-ready"] }],
       findings: [highConfidenceFinding()]
     })
 
     assert.equal(adversarial.status, "blocked")
-    assert.equal(adversarial.allowsCompletion, false)
-    assert.deepEqual(adversarial.blockingFindingIds, ["F-ready"])
+    assert.match(adversarial.summary, /open findings: F-ready/i)
 
     const verification = evaluateCompletionGate({
       policy: "strict",
@@ -87,8 +88,7 @@ function criterion(): AcceptanceCriterion {
     id: "AC-ready",
     text: "Readiness validation has fresh evidence.",
     source: "spec",
-    status: "pending",
-    requirementId: "8.1"
+    status: "pending"
   }
 }
 

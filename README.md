@@ -231,12 +231,12 @@ OpenUltraCode inherits the active selected model from opencode. Normal bundled w
 
 Fusion agents are the deliberate exception: they use explicit `model:` frontmatter so `/ultracode-fusion` can compare two configured opencode models while the selected model remains the coordinator. This still uses opencode's native agent model selection. It is not a proxy, synthetic model ID, provider route, hidden model switch, or replacement for the selected model.
 
-The package can add high-effort request hints through OpenCode 2's `context` session hook, which exposes semantic request options (`maxTokens`, `reasoningEffort`) per model call. The hints never lower an already-stronger effort setting and only use fields the protocol layer understands; OpenUltraCode never invents raw provider fields or claims hidden reasoning.
+While a workflow is in progress, the package adds high-effort request hints through OpenCode 2's `context` session hook, which exposes semantic request options (`maxTokens`, `reasoningEffort`) per model call. Requests outside a workflow are left unchanged. The hints never lower an already-stronger effort setting and only use fields the protocol layer understands; OpenUltraCode never invents raw provider fields or claims hidden reasoning.
 
 ## Safe troubleshooting
 
 - If commands, agents, or skills do not appear, restart opencode.
-- If high-effort behavior is unsupported, check workflow status for a degradation notice.
+- If high-effort hints seem missing, check that a workflow is in progress; a model that declares no reasoning variants gets none.
 - If a permission is denied, OpenUltraCode records the workflow as blocked and reports the safe next step.
 - If completion is partial or blocked, run `/ultracode-verify` and collect fresh evidence before claiming completion.
 
