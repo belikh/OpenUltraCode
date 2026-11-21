@@ -1,3 +1,10 @@
+<p align="right">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/belikh/design/latest/packages/graphics/logo/jupiter-logo-dark.svg">
+    <img alt="jupiter.au" src="https://raw.githubusercontent.com/belikh/design/latest/packages/graphics/logo/jupiter-logo-light.svg" width="260">
+  </picture>
+</p>
+
 ![Rubik's cubes on dual threshold scales](assets/rubiks-cubes-dual-threshold-scales.png)
 
 # OpenUltraCode
@@ -253,4 +260,4 @@ While a workflow is in progress, the package adds high-effort request hints thro
 - If a permission is denied, OpenUltraCode records the workflow as blocked and reports the safe next step.
 - If completion is partial or blocked, run `/ultracode-verify` and collect fresh evidence before claiming completion.
 
-See `docs/CONCEPTS.md`, `docs/LIMITS.md`, and `docs/CONFIGURATION.md` for workflow details.
+The documentation is in [`docs/`](docs/README.md) and on [docs.jupiter.au](https://docs.jupiter.au/openultracode/). Its source is `docs-src/`.

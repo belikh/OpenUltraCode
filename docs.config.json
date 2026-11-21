@@ -1,0 +1,19 @@
+{
+  "project": "OpenUltraCode",
+  "id": "openultracode",
+  "description": "An opencode plugin that runs a task as a workflow with acceptance criteria, adversarial review and a completion gate.",
+  "icon": "gate",
+  "versionFrom": "package.json",
+  "repo": "https://github.com/belikh/OpenUltraCode",
+  "glossary": {
+    "Workflow": "One task run through the phases intake, planning, execution, adversarial review, reconciliation and verification. A command such as /ultracode starts it.",
+    "Workflow record": "The file .opencode/open-ultracode/state/workflow-state.json in the project root. It holds the goal, criteria, findings, evidence and completion report of one workflow.",
+    "Acceptance criterion": "A statement that a command, a test or an observation can show to be true or false. Each has an ID such as AC-1.",
+    "Evidence": "The recorded result of one check: pass, fail, blocked or not-run, with the acceptance criteria it proves.",
+    "Finding": "A defect or gap that the adversarial review reports, with a severity, a confidence and evidence.",
+    "Completion gate": "The rules that turn criteria, evidence and findings into one status: verified, partial, blocked, failed or research-only.",
+    "Coordinator": "The session that ran the command. It keeps the workflow record and takes the final status from the completion gate.",
+    "Fusion": "A run in which two panel agents on their own models answer, criticise and revise, and a decider chooses the result.",
+    "Research mode": "The modes spec-audit and adversarial-research. They end in findings or a recommendation and report research-only."
+  }
+}

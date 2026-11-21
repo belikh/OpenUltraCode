@@ -1,0 +1,56 @@
+---
+title: Workflow
+summary: The six phases of a workflow, the roles that do the work, and how much of it a small task needs.
+order: 10
+icon: topology
+audience: users
+status: stable
+---
+
+A [[term:Workflow]] is one task with a goal, acceptance criteria and a record of what was checked. The `open-ultracode` skill tells the model how to run it. The plugin stores the record and computes the final status.
+
+## Phases
+
+| Phase | What happens | What is recorded |
+| --- | --- | --- |
+| Intake | The model states the goal, the constraints and the acceptance criteria. It asks you only when the answer changes behaviour, safety or scope. | goal, constraints, assumptions, criteria |
+| Planning | It orders the steps and names the check that proves each criterion. | the phase |
+| Execution | It makes the change. For a change in behaviour it writes the failing check first. | the phase |
+| Adversarial review | It tries to show that the result is wrong. | findings |
+| Reconciliation | It fixes each finding or rejects it with a reason. | dispositions |
+| Verification | It runs each check again and asks the gate for the status. | evidence, completion report |
+
+The research modes skip execution. They end after the findings and report `research-only`.
+
+## Roles
+
+Seven agents can do the roles: coordinator, planner, implementer, adversary, reconciler, verifier and researcher. [[reference/agents]] lists them. The coordinator is the session that ran the command. It gives each agent the goal, the criteria and the files in scope, because an agent starts with no memory of the session.
+
+The adversary gets the change, the criteria and the commands to run. It does not get the implementer's own judgement of the work.
+
+When subagents are not available, the model does every role itself in the same session and labels each one. The skill calls this the single-session fallback. The final report then says that the review was not independent.
+
+## Size of the workflow
+
+The skill scales the workflow to the task:
+
+| Task | What runs |
+| --- | --- |
+| One file, clear criteria, low risk | The simple-task shortcut: state the criterion, make the smallest change, run one check, report. |
+| Several files or a change in behaviour | Every phase in the main session. The adversary and the verifier run as subagents. |
+| Large, risky or underspecified | Every phase with every role as a subagent, and a spec-audit before any change. |
+
+A task that you start with an OpenUltraCode command always runs at least the second row.
+
+## Stop conditions
+
+The skill stops the model in three cases:
+
+- You deny a permission or a tool call. The model stops that path and names the safe next step. It does not look for another route to the same action.
+- The same action ran twice with the same result. The model reports it and does not run it a third time.
+- A check cannot run. The model records it as blocked once and moves on.
+
+:::see-also
+- [[concepts/completion-gate]]
+- [[guides/run-a-workflow]]
+:::

@@ -1,0 +1,82 @@
+---
+title: Workflow record
+summary: The file that holds one workflow, its fields, and when the plugin creates, replaces and ends it.
+order: 40
+icon: file
+audience: developers
+status: stable
+---
+
+The plugin stores one [[term:Workflow record]] per project:
+
+```text title="Path"
+.opencode/open-ultracode/state/workflow-state.json
+```
+
+The path is relative to the project root, also when opencode runs in a subdirectory. The plugin writes a `.gitignore` with the content `*` into the directory, so git ignores the record. It leaves an existing `.gitignore` as it is.
+
+## Fields
+
+```json title="workflow-state.json"
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-11-21T12:57:48.340Z",
+  "state": {
+    "schemaVersion": 1,
+    "sessionId": "ses_e01d0cdf8ffe",
+    "mode": "build",
+    "phase": "verification",
+    "startedAt": "2026-11-21T12:50:02.118Z",
+    "updatedAt": "2026-11-21T12:57:48.340Z",
+    "goal": "Add a --dry-run flag to the deploy script.",
+    "constraints": [],
+    "assumptions": [],
+    "criteria": [{ "id": "AC-1", "text": "--dry-run changes nothing", "source": "user", "status": "pending" }],
+    "findings": [],
+    "verification": [],
+    "degradations": []
+  }
+}
+```
+
+| Field | Written by | Meaning |
+| --- | --- | --- |
+| `sessionId` | a command | The top-level session that owns the workflow. |
+| `mode` | a command | `build`, `debug`, `spec-audit`, `adversarial-research` or `verify`. |
+| `phase` | `open_ultracode_record_intake`, the plugin | See the list below. |
+| `goal` | a command, `open_ultracode_record_intake` | The task text, until intake replaces it. |
+| `constraints`, `assumptions`, `criteria` | `open_ultracode_record_intake` | The intake. |
+| `findings` | `open_ultracode_record_finding` | Every finding with its disposition. |
+| `verification` | the two verification tools | Every recorded check result, oldest first. |
+| `degradations` | the plugin | Notices about reduced capabilities. A new notice replaces an older one with the same ID. |
+| `completion` | `open_ultracode_completion_report` | The last report. |
+
+## Phases
+
+`idle`, `intake`, `planning`, `execution`, `research`, `adversarial-review`, `reconciliation`, `verification`, `remediation`, `completed`, `blocked`.
+
+A command sets `intake`. The model moves the phase with `open_ultracode_record_intake`. The plugin sets two phases itself:
+
+| Phase | Set when | Left when |
+| --- | --- | --- |
+| `blocked` | You reject a permission request, a rule denies a tool call, or an `open_ultracode_*` tool fails for a reason other than its input. | `open_ultracode_record_intake` sets another phase. |
+| `completed` | A completion report ends the workflow. | The next command starts a new record. |
+
+A workflow is open in every phase except `idle` and `completed`.
+
+## Evidence that counts
+
+The `verification` list keeps every record. The gate, the status tool and the compaction summary use the latest record of each `id`.
+
+## Damaged files
+
+The plugin checks the file each time it reads it. A file that is not JSON, has an unknown mode or phase, or lacks one of the lists is moved to `workflow-state.json.bak`. The plugin then reports the notice `workflow-state-corrupt` and continues without a record.
+
+## Compaction
+
+When opencode compacts a session of the workflow, the plugin adds a summary of the record to the compaction prompt. It starts with `OpenUltraCode workflow continuity` and lists the mode, the phase, the goal, the open findings and the latest result of each check. Sessions outside the workflow get no summary.
+
+:::see-also
+- [[reference/tools]]
+- [[concepts/session-ownership]]
+:::

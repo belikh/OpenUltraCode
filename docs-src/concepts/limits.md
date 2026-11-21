@@ -1,0 +1,49 @@
+---
+title: Limits
+summary: What OpenUltraCode does not change in opencode, and what its request hints can and cannot do.
+order: 40
+icon: shield
+audience: users
+status: stable
+---
+
+## Models
+
+OpenUltraCode uses the model you selected in opencode. It installs no model IDs and no provider routes, and it runs no proxy. Requests go through the providers you configured.
+
+The three fusion agents are the exception. Each names its own model in its agent file, and opencode starts it on that model. You choose those models. See [[guides/choose-fusion-models]].
+
+## Request hints
+
+During an open workflow the plugin asks for more output tokens and a higher reasoning effort. [[reference/options]] has the rules. The hints have three limits:
+
+- The plugin sends an effort only when the model declares it. Some providers reject an undeclared value with HTTP 400.
+- The plugin caps the token budget at the model's output limit.
+- A provider can ignore a hint. The plugin cannot detect that and makes no claim about it.
+
+## Reasoning
+
+OpenUltraCode reads no hidden reasoning and depends on none. The record holds what can be checked: criteria, check results, findings and assumptions.
+
+## Enforcement
+
+The gate reports a status. It does not stop the model from editing files or from saying that the work is done. The skill tells the model to take the status from the gate, and the report is in the record for you to read.
+
+A check result is what the model recorded. The plugin does not run the checks itself.
+
+## Notices
+
+A notice records that something the workflow relies on was reduced or missing. `open_ultracode_status` lists the notices.
+
+| Notice ID starts with | Cause | Blocks the workflow |
+| --- | --- | --- |
+| `permission-denied-` | A permission was denied or rejected. | yes |
+| `phase-` | One of the plugin's own tools failed. | yes |
+| `tool-error-` | Another tool failed. | no |
+| `unsupported-` | A fusion model, provider or variant is not available. | no |
+| `workflow-state-corrupt` | The record file could not be read. | no |
+
+:::see-also
+- [[concepts/completion-gate]]
+- [[reference/workflow-record]]
+:::

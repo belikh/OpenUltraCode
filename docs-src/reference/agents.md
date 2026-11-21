@@ -1,0 +1,41 @@
+---
+title: Agents
+summary: The seven role agents and the three fusion agents, with what each one may do.
+order: 60
+icon: user
+audience: users
+status: stable
+---
+
+The installer copies ten agent files into `~/.config/opencode/agents/`. The role agents use the model you selected in opencode. The fusion agents name their own model.
+
+## Role agents
+
+| Agent | Role | Edit | Shell | Other |
+| --- | --- | --- | --- | --- |
+| `open-ultracode` | Coordinator: keeps the phases in order and records intake, findings and evidence. | deny | ask | `task`: ask |
+| `open-ultracode-planner` | Turns the task into steps and a check for each criterion. | deny | ask | |
+| `open-ultracode-implementer` | Makes one bounded change and runs its check. | ask | ask | |
+| `open-ultracode-adversary` | Looks for defects and reports findings. | deny | ask | |
+| `open-ultracode-reconciler` | Gives each finding a disposition. | deny | ask | |
+| `open-ultracode-verifier` | Runs the checks again and reports the results. | deny | ask | |
+| `open-ultracode-researcher` | Attacks a claim, a spec or a plan. | deny | ask | `webfetch`: ask |
+
+The columns show the `permission` block each agent ships with. To stop the questions for an agent, change `ask` to `allow` in its file. An upgrade replaces the file and saves your version in `open-ultracode-backup/`.
+
+Role agents report their results to the session that started them. That session records them with the tools in [[reference/tools]].
+
+## Fusion agents
+
+| Agent | Role | Release default |
+| --- | --- | --- |
+| `ultracode-fusion-panel-a` | Panel A | `mistral/mistral-large-4#max` |
+| `ultracode-fusion-panel-b` | Panel B | `mistral/mistral-large-4#max` |
+| `ultracode-fusion-arbiter` | Decider | `mistral/mistral-large-4#max` |
+
+A fusion agent may not edit files, run shell commands or change the fusion models. It answers from the context the coordinator gives it.
+
+:::see-also
+- [[guides/choose-fusion-models]]
+- [[concepts/workflow]]
+:::
