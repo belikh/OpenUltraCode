@@ -18,21 +18,21 @@ describe("OpenUltraCode installer guard rails", () => {
   const regressions: ReadonlyArray<{ name: string; file: string; from: string | RegExp; to: string; error: RegExp }> = [
     {
       name: "inline config edits that delete foreign plugins",
-      file: "install.sh",
+      file: "scripts/installer-common.sh",
       from: "lib register",
       to: "node -e 'delete config.plugin' && lib register",
       error: /install\.sh must not edit opencode config inline/u
     },
     {
       name: "a single-file V1 plugin registration",
-      file: "install-dev.sh",
+      file: "scripts/installer-common.sh",
       from: "/.opencode/plugins/open-ultracode\"",
       to: "/.opencode/plugins/open-ultracode.ts\"",
       error: /install-dev\.sh must register the \.opencode\/plugins\/open-ultracode directory/u
     },
     {
       name: "a swallowed menu failure in bash",
-      file: "install.sh",
+      file: "scripts/installer-common.sh",
       from: /model=\$\(choose_model ([^\n]*)\) \|\| exit \$\?/u,
       to: "model=$(choose_model $1)",
       error: /install\.sh must propagate failures/u
@@ -61,8 +61,8 @@ describe("OpenUltraCode installer guard rails", () => {
     {
       name: "a PowerShell scope-qualifier interpolation bug",
       file: "install.ps1",
-      from: "throw \"Could not download the latest OpenUltraCode release asset from ${releaseUrl}: $_\"",
-      to: "throw \"Could not download the latest OpenUltraCode release asset from $releaseUrl: $_\"",
+      from: "release asset and its checksum from ${releaseUrl}: $_\"",
+      to: "release asset and its checksum from $releaseUrl: $_\"",
       error: /install\.ps1 contains "\$\.\.\.:"/u
     },
     {
@@ -73,11 +73,32 @@ describe("OpenUltraCode installer guard rails", () => {
       error: /install\.ps1 must contain only ASCII/u
     },
     {
-      name: "a shipped asset list that drifted from .opencode",
-      file: "install-dev.sh",
-      from: "ultrathink.md\"",
-      to: "\"",
-      error: /install-dev\.sh shipped commands list is out of sync/u
+      name: "assets copied inline instead of through the installer library",
+      file: "scripts/installer-common.sh",
+      from: "lib install-assets --source-dir \"$source_dir\" --config-dir \"$OPENCODE_CONFIG_DIR\"",
+      to: "cp -R \"$source_dir/.opencode/skills/open-ultracode\" \"$OPENCODE_CONFIG_DIR/skills/open-ultracode\"",
+      error: /install-dev\.sh must install and remove the skill, commands, and agents through scripts\/installer-lib\.mjs/u
+    },
+    {
+      name: "a release download that is no longer checked against its checksum",
+      file: "install.sh",
+      from: "verify_checksum \"$archive\" \"$archive.sha256\"",
+      to: ": unchecked",
+      error: /install\.sh must verify the downloaded release archive/u
+    },
+    {
+      name: "a PowerShell release download that is no longer checked against its checksum",
+      file: "install.ps1",
+      from: "if (Test-Path $checksumPath) { Assert-ArchiveChecksum $downloadPath $checksumPath }",
+      to: "",
+      error: /install\.ps1 must verify the downloaded release archive/u
+    },
+    {
+      name: "a bootstrap helper in install.ps1 that drifted from the shared file",
+      file: "install.ps1",
+      from: "if ($LASTEXITCODE -ne 0) { throw \"$What failed with exit code $LASTEXITCODE\" }",
+      to: "if ($LASTEXITCODE -gt 1) { throw \"$What failed with exit code $LASTEXITCODE\" }",
+      error: /install\.ps1 helper .* must match scripts\/installer-common\.ps1/u
     },
     {
       name: "a missing removal option",
@@ -107,7 +128,7 @@ describe("OpenUltraCode installer guard rails", () => {
 
 function copyProject(): string {
   const root = mkdtempSync(join(tmpdir(), "open-ultracode-installers-"))
-  for (const name of ["install.sh", "install-dev.sh", "install.ps1", "install-dev.ps1"]) {
+  for (const name of ["install.sh", "install-dev.sh", "install.ps1", "install-dev.ps1", "scripts/installer-common.sh", "scripts/installer-common.ps1"]) {
     cpSync(join(projectRoot, name), join(root, name))
   }
   cpSync(join(projectRoot, ".opencode", "commands"), join(root, ".opencode", "commands"), { recursive: true })

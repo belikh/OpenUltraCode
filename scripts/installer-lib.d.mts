@@ -22,6 +22,9 @@ export declare function parseModelList(text: string): string[]
 export declare function configuredModels(config: OpenCodeConfig): string[]
 export declare function orderModels(models: readonly string[]): string[]
 export declare function installSummary(input: { configDir: string; sourceDir: string }): string[]
+export declare const backupDirName: string
+export declare function installAssets(input: { sourceDir: string; configDir: string }): string[]
+export declare function removeAssets(input: { sourceDir: string; configDir: string }): void
 export declare function listModels(input: {
   configDir: string
   run?: () => { ok: boolean; stdout: string }

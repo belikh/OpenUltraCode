@@ -1,22 +1,20 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { evaluateCompletionGate, type AcceptanceCriterion, type VerificationEvidence } from "../src/index.js"
+import { currentEvidence, evaluateCompletionGate, type AcceptanceCriterion, type Finding, type VerificationEvidence } from "../src/index.js"
 
 const criteria: readonly AcceptanceCriterion[] = [
   {
     id: "AC-1",
     text: "Implementation has tests.",
     source: "spec",
-    status: "pending",
-    requirementId: "8.1"
+    status: "pending"
   },
   {
     id: "AC-2",
     text: "Completion report maps evidence to criteria.",
     source: "spec",
-    status: "pending",
-    requirementId: "8.5"
+    status: "pending"
   }
 ]
 
@@ -27,7 +25,7 @@ describe("verification completion gates", () => {
       criteria,
       evidence: [passingEvidence("VE-1", ["AC-1"]), passingEvidence("VE-2", ["AC-2"])],
       assumptions: ["Tests exercise the public export."],
-      findingIds: ["F-1"]
+      findings: [finding({ id: "F-1", disposition: "accepted" })]
     })
 
     assert.equal(report.status, "verified")
@@ -173,7 +171,107 @@ describe("verification completion gates", () => {
     assert.deepEqual(report.verificationIds, [])
     assert(report.unresolvedRisks.some((risk) => risk.includes("No verification evidence was collected because the gate is disabled.")))
   })
+
+  it("lets a rerun under the same id replace the earlier result of that check", () => {
+    const failedFirst: VerificationEvidence = {
+      id: "VE-2",
+      kind: "test",
+      result: "fail",
+      summary: "Unit tests failed.",
+      criteriaIds: ["AC-2"],
+      reason: "Assertion failed.",
+      residualRisk: "AC-2 is unproven."
+    }
+    const evidence = [passingEvidence("VE-1", ["AC-1"]), failedFirst, passingEvidence("VE-2", ["AC-2"])]
+
+    const report = evaluateCompletionGate({ policy: "strict", criteria, evidence })
+
+    assert.equal(report.status, "verified")
+    assert.deepEqual(report.verificationIds, ["VE-1", "VE-2"])
+    assert.deepEqual(report.unresolvedRisks, [])
+    assert.deepEqual(currentEvidence(evidence).map((item) => `${item.id}:${item.result}`), ["VE-1:pass", "VE-2:pass"])
+
+    // The latest result counts in both directions: a check that passed and now fails is a failure.
+    const regressed = evaluateCompletionGate({ policy: "strict", criteria, evidence: [...evidence, failedFirst] })
+    assert.equal(regressed.status, "failed")
+  })
+
+  it("holds back completion while a high- or medium-severity finding is open", () => {
+    const evidence = [passingEvidence("VE-1", ["AC-1"]), passingEvidence("VE-2", ["AC-2"])]
+    const gate = (reviewPolicy: "required" | "recommended" | "disabled", findings: readonly Finding[]) =>
+      evaluateCompletionGate({ policy: "strict", reviewPolicy, criteria, evidence, findings })
+
+    const required = gate("required", [finding({ id: "F-1", severity: "medium" })])
+    assert.equal(required.status, "blocked")
+    assert.match(required.summary, /open findings: F-1/i)
+    assert(required.unresolvedRisks.includes("F-1 remains open: Completion is claimed without evidence"))
+
+    assert.equal(gate("recommended", [finding({ id: "F-1" })]).status, "partial")
+    assert.equal(gate("disabled", [finding({ id: "F-1" })]).status, "verified")
+
+    // Deferring a finding or asking for clarification does not close it.
+    assert.equal(gate("required", [finding({ id: "F-1", disposition: "deferred" })]).status, "blocked")
+    assert.equal(gate("required", [finding({ id: "F-1", disposition: "clarification-needed" })]).status, "blocked")
+  })
+
+  it("verifies once findings are accepted, rejected with a reason, or only low severity", () => {
+    const report = evaluateCompletionGate({
+      policy: "strict",
+      reviewPolicy: "required",
+      criteria,
+      evidence: [passingEvidence("VE-1", ["AC-1"]), passingEvidence("VE-2", ["AC-2"])],
+      findings: [
+        finding({ id: "F-1", disposition: "accepted" }),
+        finding({ id: "F-2", disposition: "rejected", dispositionReason: "The test exercises the changed branch." }),
+        finding({ id: "F-3", severity: "low" })
+      ]
+    })
+
+    assert.equal(report.status, "verified")
+    assert.deepEqual(report.findingIds, ["F-1", "F-2", "F-3"])
+  })
+
+  it("never reports a research workflow as verified, and still reports its failed checks", () => {
+    const research = evaluateCompletionGate({
+      policy: "strict",
+      criteria,
+      evidence: [passingEvidence("VE-1", ["AC-1"]), passingEvidence("VE-2", ["AC-2"])],
+      researchOnly: true
+    })
+    assert.equal(research.status, "research-only")
+    assert.match(research.summary, /no completion verification was claimed/i)
+
+    const blocked = evaluateCompletionGate({
+      policy: "strict",
+      criteria: [],
+      evidence: [
+        {
+          id: "VE-3",
+          kind: "audit",
+          result: "blocked",
+          summary: "Source could not be fetched.",
+          criteriaIds: [],
+          reason: "Network access was denied.",
+          residualRisk: "The claim is unchecked."
+        }
+      ],
+      researchOnly: true
+    })
+    assert.equal(blocked.status, "blocked")
+  })
 })
+
+function finding(overrides: Partial<Finding> & Pick<Finding, "id">): Finding {
+  return {
+    severity: "high",
+    confidence: "high",
+    title: "Completion is claimed without evidence",
+    evidence: ["src/report.ts:12 returns verified before any check ran."],
+    impact: "A failing change could be reported as done.",
+    recommendation: "Run the check before reporting.",
+    ...overrides
+  } as Finding
+}
 
 function passingEvidence(id: string, criteriaIds: readonly string[]): VerificationEvidence {
   return {

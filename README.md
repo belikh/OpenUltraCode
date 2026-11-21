@@ -6,6 +6,17 @@ OpenUltraCode adds UltraCode-style workflow discipline to OpenCode 2: structured
 
 Model selection is up to you. OpenUltraCode uses no proxy and does not replace the selected model, create synthetic model IDs, or route provider traffic. Change models with opencode's normal model selection at any time; the only place OpenUltraCode names models is the opt-in fusion agents described below, and the installer's init dialogue asks you which model IDs those should use.
 
+## About this fork
+
+This repository is a fork of [norandom/OpenUltraCode](https://github.com/norandom/OpenUltraCode), which created the project. It starts from upstream 2.0.1 and differs in these ways:
+
+- The completion gate enforces adversarial findings. `open_ultracode_record_finding` records and reconciles them, and an open finding of high or medium severity holds back a verified report.
+- A check that is run again under the same ID replaces its earlier result, so a fixed failure no longer holds the gate.
+- A workflow record belongs to the session that started it and to that session's subagents. Other sessions in the project cannot change it, and high-effort request hints apply only to the workflow's own sessions.
+- The installers verify the release archive against its published SHA-256 checksum, and save a locally edited skill, command, or agent before replacing it.
+
+The installers below download this fork's releases. Set `OPENULTRACODE_REPO=owner/name` (sh) or pass `-Repo owner/name` (PowerShell) to install from another repository.
+
 ## Quick start
 
 ### Prerequisites
@@ -18,21 +29,23 @@ Model selection is up to you. OpenUltraCode uses no proxy and does not replace t
 Linux / macOS (sh):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/norandom/OpenUltraCode/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/belikh/OpenUltraCode/main/install.sh | sh
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/norandom/OpenUltraCode/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/belikh/OpenUltraCode/main/install.ps1 | iex
 ```
 
-1. Install the latest release with `curl -fsSL https://raw.githubusercontent.com/norandom/OpenUltraCode/main/install.sh | sh`.
+1. Install the latest release with `curl -fsSL https://raw.githubusercontent.com/belikh/OpenUltraCode/main/install.sh | sh`.
 
 The installer pulls the latest GitHub release asset, copies the skill, slash commands, and agents into `~/.config/opencode/`, runs the init dialogue that asks which fusion model IDs to set, and registers the plugin package directory in the `plugins` array of `~/.config/opencode/opencode.json`. OpenCode 2 loads local plugins from directories (for example `.opencode/plugins/open-ultracode/index.ts`) via `{ "package": "<path>" }` entries, not from single `.ts` files under the V1 `plugin` key.
 
 How the installers treat your configuration:
 
+- A downloaded release archive must match the SHA-256 checksum published with it, or nothing is installed. A local `--archive`/`-Archive` file is checked when a `<file>.sha256` lies next to it.
+- A skill, command, or agent file that an install replaces with different content is first saved under `~/.config/opencode/open-ultracode-backup/`, so a local edit survives an upgrade. The directory holds the files replaced by the latest install only.
 - Only OpenUltraCode's own entries are added or removed. Other plugins, permission rules, and settings in `opencode.json` and `opencode.jsonc` (comments, trailing commas, and a BOM are accepted) stay as they are, and a timestamped `.backup-openultracode-*` copy is written before a file changes.
 - Stale OpenUltraCode entries from older releases, in either file and with forward or backslash paths, are replaced by exactly one entry, so the plugin loads once.
 - The release archive is downloaded and checked next to the install directory before it replaces the old installation; a failed download or extraction leaves the working install in place. The installer refuses to replace a directory that is not an OpenUltraCode installation.
@@ -105,7 +118,7 @@ Every installer also removes OpenUltraCode. Removal deletes the copied skill and
 Linux / macOS (sh):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/norandom/OpenUltraCode/main/install.sh | sh -s -- --remove
+curl -fsSL https://raw.githubusercontent.com/belikh/OpenUltraCode/main/install.sh | sh -s -- --remove
 # or from a checkout:
 ./install.sh -remove        # release layout
 ./install-dev.sh --remove   # dev checkout (leaves the checkout in place)
@@ -114,7 +127,7 @@ curl -fsSL https://raw.githubusercontent.com/norandom/OpenUltraCode/main/install
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/norandom/OpenUltraCode/main/install.ps1 -OutFile install.ps1
+irm https://raw.githubusercontent.com/belikh/OpenUltraCode/main/install.ps1 -OutFile install.ps1
 .\install.ps1 -Remove
 # or from a checkout:
 .\install-dev.ps1 -Remove   # dev checkout (leaves the checkout in place)
@@ -231,12 +244,12 @@ OpenUltraCode inherits the active selected model from opencode. Normal bundled w
 
 Fusion agents are the deliberate exception: they use explicit `model:` frontmatter so `/ultracode-fusion` can compare two configured opencode models while the selected model remains the coordinator. This still uses opencode's native agent model selection. It is not a proxy, synthetic model ID, provider route, hidden model switch, or replacement for the selected model.
 
-The package can add high-effort request hints through OpenCode 2's `context` session hook, which exposes semantic request options (`maxTokens`, `reasoningEffort`) per model call. The hints never lower an already-stronger effort setting and only use fields the protocol layer understands; OpenUltraCode never invents raw provider fields or claims hidden reasoning.
+While a workflow is in progress, the package adds high-effort request hints through OpenCode 2's `context` session hook, which exposes semantic request options (`maxTokens`, `reasoningEffort`) per model call. Requests outside a workflow are left unchanged. The hints never lower an already-stronger effort setting and only use fields the protocol layer understands; OpenUltraCode never invents raw provider fields or claims hidden reasoning.
 
 ## Safe troubleshooting
 
 - If commands, agents, or skills do not appear, restart opencode.
-- If high-effort behavior is unsupported, check workflow status for a degradation notice.
+- If high-effort hints seem missing, check that a workflow is in progress; a model that declares no reasoning variants gets none.
 - If a permission is denied, OpenUltraCode records the workflow as blocked and reports the safe next step.
 - If completion is partial or blocked, run `/ultracode-verify` and collect fresh evidence before claiming completion.
 

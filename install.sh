@@ -3,22 +3,18 @@ set -eu
 # Model IDs and paths are never meant to be glob patterns.
 set -f
 
-REPO="norandom/OpenUltraCode"
+REPO="${OPENULTRACODE_REPO:-belikh/OpenUltraCode}"
 : "${HOME:?HOME must be set}"
 INSTALL_DIR="${OPENULTRACODE_HOME:-$HOME/.local/share/open-ultracode}"
 OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
 RELEASE_URL="https://github.com/$REPO/releases/latest/download/open-ultracode-release.tar.gz"
 
-# Files OpenUltraCode ships; tests/installer-assets.test.ts keeps these lists in sync with .opencode.
-SHIPPED_COMMANDS="ultracode-debug.md ultracode-fusion-models.md ultracode-fusion.md ultracode-research.md ultracode-spec-audit.md ultracode-verify.md ultracode.md ultrathink-fusion.md ultrathink.md"
-SHIPPED_AGENTS="open-ultracode-adversary.md open-ultracode-implementer.md open-ultracode-planner.md open-ultracode-reconciler.md open-ultracode-researcher.md open-ultracode-verifier.md open-ultracode.md ultracode-fusion-arbiter.md ultracode-fusion-panel-a.md ultracode-fusion-panel-b.md"
-FUSION_AGENTS="ultracode-fusion-panel-a.md ultracode-fusion-panel-b.md ultracode-fusion-arbiter.md"
-
 usage() {
   cat <<'USAGE'
 Usage: install.sh [options]
 
-Installs the latest OpenUltraCode release for opencode.
+Installs the latest OpenUltraCode release for opencode. The download is checked against the
+checksum the release publishes. Set OPENULTRACODE_REPO=owner/name to install from another fork.
 Options:
   -remove, --remove, -r   Remove OpenUltraCode from opencode instead of installing.
   --non-interactive       Do not prompt; keep installed fusion models or use the shipped defaults.
@@ -28,6 +24,7 @@ Options:
   --panel-b <model>       Fusion panel B model.
   --decider <model>       Fusion arbiter model.
   --archive <file>        Install from a local release archive instead of downloading it.
+                          A <file>.sha256 next to it is checked when present.
   -h, --help              Show this help.
 USAGE
 }
@@ -75,82 +72,40 @@ done
 
 INSTALLER_LIB="$INSTALL_DIR/scripts/installer-lib.mjs"
 MODEL_MENU="$INSTALL_DIR/scripts/model-menu.mjs"
+COMMON="$INSTALL_DIR/scripts/installer-common.sh"
 
 need_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required for OpenUltraCode install."
 }
 
-lib() {
-  node "$INSTALLER_LIB" "$@"
+# Model selection, asset installation, and the runtime check are shared with install-dev.sh.
+# They ship inside the release, so they are loaded from the installation itself.
+load_common() {
+  [ -f "$COMMON" ] || fail "$INSTALL_DIR was installed by an older release. Run this installer once without --remove to update it, then try again."
+  # installer-common.sh reads these; naming them here fails early if one is unset.
+  : "$OPENCODE_CONFIG_DIR" "$INSTALLER_LIB" "$MODEL_MENU" "$NON_INTERACTIVE" "$RUNTIME_CHECK"
+  # shellcheck source=scripts/installer-common.sh
+  . "$COMMON"
 }
 
-# Your providers' models first, then opencode's hosted catalog; see list-models in
-# scripts/installer-lib.mjs (it retries `opencode models` and adds models from your config).
-detect_opencode_models() {
-  lib list-models --config-dir "$OPENCODE_CONFIG_DIR" || true
-}
-
-has_tty() {
-  [ "$NON_INTERACTIVE" -eq 0 ] && (: </dev/tty >/dev/tty) 2>/dev/null
-}
-
-agent_prompt() {
-  case "$1" in
-    ultracode-fusion-panel-a.md) echo "Choose fusion panel A model" ;;
-    ultracode-fusion-panel-b.md) echo "Choose fusion panel B model" ;;
-    *) echo "Choose fusion arbiter model" ;;
-  esac
-}
-
-agent_override() {
-  case "$1" in
-    ultracode-fusion-panel-a.md) printf '%s' "$PANEL_A" ;;
-    ultracode-fusion-panel-b.md) printf '%s' "$PANEL_B" ;;
-    *) printf '%s' "$DECIDER" ;;
-  esac
-}
-
-# Prints the chosen model. Always called as $(choose_model ...) || exit $? because bash
-# does not apply set -e inside command substitutions. The menu reads /dev/tty so it
-# also works when this script itself arrives on stdin (curl | sh).
-choose_model() {
-  if ! has_tty; then
-    printf '%s: using %s\n' "$1" "$2" >&2
-    printf '%s' "$2"
-    return 0
+# Prints the SHA-256 of a file. The file is read from stdin so the output never carries a path.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum <"$1" | cut -d ' ' -f 1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 <"$1" | cut -d ' ' -f 1
+  else
+    fail "sha256sum or shasum is required to verify the release archive."
   fi
-  # shellcheck disable=SC2086 # one detected model per word
-  node "$MODEL_MENU" "$1" "$2" $DETECTED_MODELS </dev/tty 2>/dev/tty || return $?
 }
 
-# Chooses every fusion model before anything is copied, so a cancelled menu or an invalid
-# model leaves the existing configuration untouched.
-resolve_fusion_models() {
-  source_agents="$1"
-  RESOLVED_MODELS=""
-  DETECTED_MODELS=""
-  if has_tty; then
-    DETECTED_MODELS=$(detect_opencode_models)
+# $2 is the checksum file the release publishes: the output of sha256sum for the archive.
+verify_checksum() {
+  expected=$(cut -d ' ' -f 1 <"$2" | tr 'A-F' 'a-f')
+  actual=$(sha256_of "$1") || exit $?
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    fail "the release archive does not match its checksum (expected ${expected:-none}, got $actual); the existing installation was left unchanged."
   fi
-  for agent in $FUSION_AGENTS; do
-    model=$(agent_override "$agent")
-    if [ -z "$model" ]; then
-      default_model=$(lib get-agent-model "$source_agents/$agent") || exit $?
-      [ -n "$default_model" ] || fail "shipped agent $agent has no default model"
-      current_model=$(lib get-agent-model "$OPENCODE_CONFIG_DIR/agents/$agent") || exit $?
-      model=$(choose_model "$(agent_prompt "$agent")" "${current_model:-$default_model}") || exit $?
-    fi
-    lib validate-model "$model"
-    RESOLVED_MODELS="$RESOLVED_MODELS $agent=$model"
-  done
-}
-
-model_for() {
-  for pair in $RESOLVED_MODELS; do
-    case "$pair" in
-      "$1="*) printf '%s' "${pair#*=}" ;;
-    esac
-  done
 }
 
 is_install_dir() {
@@ -182,11 +137,20 @@ install_latest_release() {
 
   if [ -n "$ARCHIVE" ]; then
     cp "$ARCHIVE" "$archive"
+    # A checksum file next to a local archive is checked; without one the archive is taken as given.
+    if [ -f "$ARCHIVE.sha256" ]; then
+      cp "$ARCHIVE.sha256" "$archive.sha256"
+    fi
   else
     need_command curl
     echo "Downloading latest OpenUltraCode release from $RELEASE_URL..."
     curl -fsSL --retry 3 --connect-timeout 20 "$RELEASE_URL" -o "$archive" ||
       fail "could not download the latest OpenUltraCode release asset."
+    curl -fsSL --retry 3 --connect-timeout 20 "$RELEASE_URL.sha256" -o "$archive.sha256" ||
+      fail "could not download the checksum of the latest OpenUltraCode release asset."
+  fi
+  if [ -f "$archive.sha256" ]; then
+    verify_checksum "$archive" "$archive.sha256"
   fi
   tar -xzf "$archive" -C "$STAGE_DIR" || fail "could not extract the release archive; the existing installation was left unchanged."
   is_install_dir "$STAGE_DIR" || fail "the release archive is incomplete; the existing installation was left unchanged."
@@ -203,78 +167,12 @@ install_latest_release() {
   fi
 }
 
-# Makes the running opencode pick up the install (`opencode reload`), then checks the REAL
-# installation: the coordinator and every fusion agent must name a provider, model, and variant
-# that opencode offers.
-verify_runtime() {
-  source_dir="$1"
-  if [ "$RUNTIME_CHECK" = "skip" ]; then
-    echo "OpenUltraCode: runtime check skipped (--skip-runtime-check)."
-    return 0
-  fi
-  if ! command -v opencode >/dev/null 2>&1; then
-    echo "OpenUltraCode: opencode is not on PATH; skipped the runtime check." >&2
-    return 0
-  fi
-  opencode reload >/dev/null 2>&1 || echo "OpenUltraCode: 'opencode reload' failed; restart opencode to load the changes." >&2
-  check_status=0
-  if [ "$RUNTIME_CHECK" = "live" ]; then
-    node "$source_dir/scripts/runtime-check.mjs" --config-dir "$OPENCODE_CONFIG_DIR" --live || check_status=$?
-  else
-    node "$source_dir/scripts/runtime-check.mjs" --config-dir "$OPENCODE_CONFIG_DIR" || check_status=$?
-  fi
-  if [ "$check_status" -eq 1 ]; then
-    fail "the runtime check found problems (see above). Fix them with --panel-a/--panel-b/--decider or /ultracode-fusion-models."
-  fi
-  if [ "$check_status" -ne 0 ]; then
-    echo "OpenUltraCode: the runtime check could not reach opencode; run 'node $source_dir/scripts/runtime-check.mjs' after starting it." >&2
-  fi
-}
-
-remove_legacy_global_files() {
-  # OpenCode 2 does not load ~/.config/opencode/tools; the plugin registers the fusion tool itself.
-  rm -f "$OPENCODE_CONFIG_DIR/tools/open_ultracode_configure_fusion.ts" "$OPENCODE_CONFIG_DIR/lib/fusion-config.ts"
-}
-
-install_global_assets() {
-  source_dir="$1"
-  resolve_fusion_models "$source_dir/assets/agents"
-
-  mkdir -p "$OPENCODE_CONFIG_DIR/skills" "$OPENCODE_CONFIG_DIR/commands" "$OPENCODE_CONFIG_DIR/agents"
-  rm -rf "$OPENCODE_CONFIG_DIR/skills/open-ultracode"
-  cp -R "$source_dir/.opencode/skills/open-ultracode" "$OPENCODE_CONFIG_DIR/skills/open-ultracode"
-  for name in $SHIPPED_COMMANDS; do
-    cp "$source_dir/.opencode/commands/$name" "$OPENCODE_CONFIG_DIR/commands/$name"
-  done
-  for name in $SHIPPED_AGENTS; do
-    cp "$source_dir/assets/agents/$name" "$OPENCODE_CONFIG_DIR/agents/$name"
-  done
-  for agent in $FUSION_AGENTS; do
-    lib set-agent-model "$OPENCODE_CONFIG_DIR/agents/$agent" "$(model_for "$agent")"
-  done
-  remove_legacy_global_files
-
-  lib register --config-dir "$OPENCODE_CONFIG_DIR" --plugin-path "$source_dir/.opencode/plugins/open-ultracode"
-}
-
-remove_global_assets() {
-  rm -rf "$OPENCODE_CONFIG_DIR/skills/open-ultracode"
-  # Remove only the files OpenUltraCode ships, never a user's own ultracode-* agents or commands.
-  for name in $SHIPPED_COMMANDS; do
-    rm -f "$OPENCODE_CONFIG_DIR/commands/$name"
-  done
-  for name in $SHIPPED_AGENTS; do
-    rm -f "$OPENCODE_CONFIG_DIR/agents/$name"
-  done
-  remove_legacy_global_files
-  lib unregister --config-dir "$OPENCODE_CONFIG_DIR"
-}
-
 need_command node
 
 if [ "$REMOVE" -eq 1 ]; then
   [ -f "$INSTALLER_LIB" ] || fail "$INSTALL_DIR does not contain an OpenUltraCode installation. Set OPENULTRACODE_HOME, or reinstall and then run --remove."
-  remove_global_assets
+  load_common
+  remove_global_assets "$INSTALL_DIR"
   if is_install_dir "$INSTALL_DIR"; then
     rm -rf "$INSTALL_DIR"
   fi
@@ -290,9 +188,7 @@ for model in "$PANEL_A" "$PANEL_B" "$DECIDER"; do
 done
 
 install_latest_release
+load_common
 install_global_assets "$INSTALL_DIR"
 verify_runtime "$INSTALL_DIR"
-
-# Show what is actually installed, read back from disk.
-echo
-lib summary --config-dir "$OPENCODE_CONFIG_DIR" --source-dir "$INSTALL_DIR"
+print_summary "$INSTALL_DIR"

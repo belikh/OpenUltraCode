@@ -95,7 +95,16 @@ export interface SessionCompactionEvent extends SessionContextEvent {
 
 export type SessionHookName = "prompt" | "context" | "compaction"
 
+/** The fields of a session (`ctx.session.get()`) the plugin reads. */
+export interface SessionInfoSummary {
+  readonly id: string
+  /** Set for a session another session started, for example a subagent's. */
+  readonly parentID?: string
+}
+
 export interface SessionDomain {
+  /** Resolves to the session itself (the client unwraps the response body). */
+  get(input: { sessionID: string }): Promise<SessionInfoSummary>
   hook(name: "prompt", callback: (event: SessionPromptEvent) => void | Promise<void>): Promise<Registration>
   hook(
     name: "context" | "compaction",

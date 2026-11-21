@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { basename, join } from "node:path"
 
 export interface InstallerValidationResult {
@@ -7,12 +7,17 @@ export interface InstallerValidationResult {
 }
 
 // Static guard rails for the four installers. Behavior is covered by tests/installer-lib.test.ts
-// (config editing) and tests/installer-e2e.test.ts (real installer runs); these rules catch
-// regressions those tests cannot see, such as a check that only fails on another platform.
+// (config and asset editing) and tests/installer-e2e.test.ts (real installer runs); these rules
+// catch regressions those tests cannot see, such as a check that only fails on another platform.
+//
+// Each installer is judged together with the shared file it loads, because that is what runs.
 
 const shellInstallers = ["install.sh", "install-dev.sh"] as const
 const powershellInstallers = ["install.ps1", "install-dev.ps1"] as const
+const releaseInstallers = ["install.sh", "install.ps1"] as const
 const allInstallers = [...shellInstallers, ...powershellInstallers] as const
+const sharedShell = "scripts/installer-common.sh"
+const sharedPowerShell = "scripts/installer-common.ps1"
 const fusionAgents = ["ultracode-fusion-panel-a.md", "ultracode-fusion-panel-b.md", "ultracode-fusion-arbiter.md"]
 
 const rules: ReadonlyArray<{ readonly applies: readonly string[]; readonly test: (content: string) => boolean; readonly message: string }> = [
@@ -36,6 +41,20 @@ const rules: ReadonlyArray<{ readonly applies: readonly string[]; readonly test:
     applies: allInstallers,
     test: (content) => /set-agent-model/u.test(content) && /get-agent-model/u.test(content),
     message: "must read and write fusion agent models through scripts/installer-lib.mjs"
+  },
+  {
+    applies: allInstallers,
+    // One tested implementation copies, backs up, and removes the shipped files on every platform.
+    test: (content) => /\binstall-assets\b/u.test(content) && /\bremove-assets\b/u.test(content) && !/^\s*(?:cp|Copy-Item)\b[^\n]*(?:\.opencode|assets)[/\\]/mu.test(content),
+    message: "must install and remove the skill, commands, and agents through scripts/installer-lib.mjs, not with inline copies"
+  },
+  {
+    applies: releaseInstallers,
+    // A release that is downloaded must match the checksum published with it.
+    test: (content) =>
+      (/\bverify_checksum "\$archive" "\$archive\.sha256"/u.test(content) && /sha256sum/u.test(content) && /\$RELEASE_URL\.sha256/u.test(content)) ||
+      (/Assert-ArchiveChecksum \$downloadPath \$checksumPath/u.test(content) && /Get-FileHash/u.test(content) && /\$releaseUrl\.sha256/u.test(content)),
+    message: "must verify the downloaded release archive against its published SHA-256 checksum"
   },
   {
     applies: allInstallers,
@@ -125,14 +144,18 @@ const psVariableScopeBugPattern = /"[^"\n]*?\$(?!env:)[A-Za-z_][A-Za-z0-9_]*:/u
 
 export function validateInstallers(root = process.cwd()): InstallerValidationResult {
   const errors: string[] = []
-  const shipped = {
-    commands: listShipped(root, "commands"),
-    agents: listShipped(root, "agents")
+
+  const shared = {
+    shell: readInstaller(root, sharedShell, errors),
+    powershell: readInstaller(root, sharedPowerShell, errors)
   }
 
   for (const relativePath of allInstallers) {
-    const content = readInstaller(root, relativePath, errors)
-    if (content === undefined) continue
+    const own = readInstaller(root, relativePath, errors)
+    const isPowerShell = powershellInstallers.includes(relativePath as (typeof powershellInstallers)[number])
+    const common = isPowerShell ? shared.powershell : shared.shell
+    if (own === undefined || common === undefined) continue
+    const content = `${own}\n${common}`
 
     for (const rule of rules) {
       if (rule.applies.includes(relativePath) && !rule.test(content)) {
@@ -140,19 +163,11 @@ export function validateInstallers(root = process.cwd()): InstallerValidationRes
       }
     }
 
-    for (const [kind, names] of Object.entries(shipped)) {
-      const listed = readShippedList(content, kind)
-      if (listed === undefined) {
-        errors.push(`${relativePath} must list the shipped ${kind} explicitly`)
-      } else if (names !== undefined && listed.join(",") !== names.join(",")) {
-        errors.push(`${relativePath} shipped ${kind} list is out of sync with .opencode/${kind}: expected ${names.join(", ")}`)
-      }
-    }
     for (const agent of fusionAgents) {
       if (!content.includes(agent)) errors.push(`${relativePath} must configure ${agent}`)
     }
 
-    if (powershellInstallers.includes(relativePath as (typeof powershellInstallers)[number])) {
+    if (isPowerShell) {
       const bug = psVariableScopeBugPattern.exec(content)
       if (bug !== null) {
         errors.push(`${relativePath} contains "$...:" inside a double-quoted string (${bug[0]}); use ${"${...}"} to delimit the variable`)
@@ -163,24 +178,26 @@ export function validateInstallers(root = process.cwd()): InstallerValidationRes
     }
   }
 
+  // install.ps1 needs a few helpers before the release (and with it the shared file) is on
+  // disk. They are the one piece of code kept twice, so the copies must not drift apart.
+  const bootstrap = readInstaller(root, "install.ps1", [])
+  if (bootstrap !== undefined && shared.powershell !== undefined) {
+    for (const helper of bootstrapHelpers) {
+      const copies = [bootstrap, shared.powershell].map((content) => helper.exec(content)?.[0].replace(/\r\n/gu, "\n"))
+      if (copies[0] === undefined || copies[0] !== copies[1]) {
+        errors.push(`install.ps1 helper ${helper.source.slice(0, 40)} must match ${sharedPowerShell}`)
+      }
+    }
+  }
+
   return { ok: errors.length === 0, errors }
 }
 
-function listShipped(root: string, kind: string): string[] | undefined {
-  const directory = join(root, kind === "agents" ? "assets" : ".opencode", kind)
-  if (!existsSync(directory)) return undefined
-  return readdirSync(directory).filter((name) => name.endsWith(".md")).sort()
-}
-
-/** Reads SHIPPED_COMMANDS="a b" (sh) or $ShippedCommands = @("a", "b") (PowerShell). */
-function readShippedList(content: string, kind: string): string[] | undefined {
-  const name = kind === "commands" ? "Commands" : "Agents"
-  const sh = new RegExp(`^SHIPPED_${name.toUpperCase()}="([^"]*)"`, "mu").exec(content)
-  if (sh?.[1] !== undefined) return sh[1].split(/\s+/u).filter(Boolean).sort()
-  const ps = new RegExp(`^\\$Shipped${name} = @\\(([^)]*)\\)`, "mu").exec(content)
-  if (ps?.[1] !== undefined) return [...ps[1].matchAll(/"([^"]+)"/gu)].map((match) => match[1] ?? "").sort()
-  return undefined
-}
+const bootstrapHelpers = [
+  /^\$ModelIdPattern = .*$/mu,
+  /^function Assert-ModelId\b[\s\S]*?^\}/mu,
+  /^function Invoke-Native \{[\s\S]*?^\}/mu
+]
 
 function readInstaller(root: string, relativePath: string, errors: string[]): string | undefined {
   const fullPath = join(root, relativePath)

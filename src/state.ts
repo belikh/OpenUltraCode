@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto"
 import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, resolve, sep } from "node:path"
 
-import type { DegradationNotice, PersistedWorkflowState, WorkflowState } from "./types.js"
+import { isProjectRelativePath, isRecord } from "./input.js"
+import { createCorruptStateNotice } from "./notices.js"
+import { workflowModes, workflowPhases, type DegradationNotice, type PersistedWorkflowState, type WorkflowState } from "./types.js"
 
 const stateFileName = "workflow-state.json"
 
@@ -20,7 +22,6 @@ export interface WorkflowStateStore {
    * changes. Returning undefined leaves the state unchanged.
    */
   readonly mutate: (change: (state: WorkflowState) => WorkflowState | undefined) => Promise<WorkflowState | undefined>
-  readonly clear: () => Promise<void>
 }
 
 // One queue per state file and process: every plugin instance and tool shares it.
@@ -93,18 +94,15 @@ export function createWorkflowStateStore(
         updatedAt: state.updatedAt,
         state
       }
+      await ignoreInVersionControl(dirname(statePath))
       await writeStateAtomically(statePath, `${JSON.stringify(persisted, null, 2)}\n`)
-    },
-
-    async clear(): Promise<void> {
-      await rejectSymlinkedStatePath(root, config.state.directory, statePath)
-      await rm(statePath, { force: true })
     }
   }
 
   async function backupCorrupt(error: unknown): Promise<WorkflowStateLoadResult> {
     await backupCorruptState(statePath)
-    return { state: undefined, degradations: [createCorruptStateNotice(error)] }
+    const reason = error instanceof Error ? error.message : "State file could not be read."
+    return { state: undefined, degradations: [createCorruptStateNotice({ reason })] }
   }
 
   return store
@@ -127,6 +125,15 @@ async function retryTransient<T>(operation: () => Promise<T>, attempts = 8): Pro
   }
 }
 
+/** Workflow state is local working data; keep it out of the project's version control. */
+async function ignoreInVersionControl(stateDirectory: string): Promise<void> {
+  try {
+    await writeFile(resolve(stateDirectory, ".gitignore"), "*\n", { encoding: "utf8", flag: "wx" })
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== "EEXIST") throw error
+  }
+}
+
 async function writeStateAtomically(statePath: string, contents: string): Promise<void> {
   const stateDirectory = dirname(statePath)
   const stagingDirectory = await mkdtemp(resolve(stateDirectory, `.workflow-state-write-${randomUUID()}-`))
@@ -141,7 +148,7 @@ async function writeStateAtomically(statePath: string, contents: string): Promis
 }
 
 function resolveStatePath(projectRoot: string, stateDirectory: string): string {
-  if (!isSafeProjectRelativePath(stateDirectory)) {
+  if (!isProjectRelativePath(stateDirectory)) {
     throw new Error("state.directory must be a project-relative path and must not contain '..' segments or backslashes")
   }
 
@@ -153,14 +160,6 @@ function resolveStatePath(projectRoot: string, stateDirectory: string): string {
   }
 
   return statePath
-}
-
-function isSafeProjectRelativePath(value: string): boolean {
-  if (value.length === 0 || value.startsWith("/") || value.includes("\\")) {
-    return false
-  }
-
-  return !value.split("/").includes("..")
 }
 
 async function rejectSymlinkedStatePath(root: string, stateDirectory: string, statePath: string): Promise<void> {
@@ -205,32 +204,25 @@ async function backupCorruptState(statePath: string): Promise<void> {
   }
 }
 
-function createCorruptStateNotice(error: unknown): DegradationNotice {
-  const reason = error instanceof Error ? error.message : "State file could not be read."
+const stateLists = ["constraints", "assumptions", "criteria", "findings", "verification", "degradations"] as const
 
-  return {
-    id: "workflow-state-corrupt",
-    capability: "workflow state persistence",
-    severity: "warning",
-    reason,
-    userVisibleMessage: "The OpenUltraCode workflow state file was corrupt and has been ignored for safety.",
-    safeNextAction: "Continue with a new workflow state; inspect workflow-state.json.bak if prior context is needed.",
-    occurredAt: new Date().toISOString()
-  }
-}
-
+/**
+ * Checks the shape every reader relies on: known mode and phase, and every list present. A file
+ * that fails is treated as corrupt, so a hand-edited or outdated state cannot crash a tool.
+ */
 function isPersistedWorkflowState(value: unknown): value is PersistedWorkflowState {
   if (!isRecord(value) || value.schemaVersion !== 1 || typeof value.updatedAt !== "string") {
     return false
   }
 
   const state = value.state
-
-  return isRecord(state) && state.schemaVersion === 1 && typeof state.mode === "string" && typeof state.phase === "string"
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
+  return (
+    isRecord(state) &&
+    state.schemaVersion === 1 &&
+    (workflowModes as readonly unknown[]).includes(state.mode) &&
+    (workflowPhases as readonly unknown[]).includes(state.phase) &&
+    stateLists.every((list) => Array.isArray(state[list]))
+  )
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

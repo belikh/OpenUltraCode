@@ -14,8 +14,6 @@ const requiredScaffoldPaths = [
   ".opencode/plugins",
   ".opencode/plugins/open-ultracode",
   ".opencode/plugins/open-ultracode/index.ts",
-  ".opencode/lib",
-  ".opencode/lib/fusion-config.ts",
   ".opencode/skills/open-ultracode",
   "assets/agents",
   ".opencode/commands",
@@ -80,7 +78,7 @@ describe("OpenUltraCode scaffold", () => {
     assert.equal("model" in config, false)
     assert.equal("provider" in config, false)
     assert.equal(manifest.packageManager, "pnpm@11.4.0")
-    assert.equal(manifest.version, "2.0.1")
+    assert.equal(manifest.version, "2.1.0")
     // One offline quality gate shared by the pre-commit hook, CI, and install-dev; Docker is optional.
     assert.equal(scripts.lint, "eslint .")
     assert.equal(scripts["lint:container"], "dagger call lint --source .")
@@ -93,10 +91,16 @@ describe("OpenUltraCode scaffold", () => {
     for (const shInstaller of [installer, devInstaller]) {
       assert.match(shInstaller, /OPENCODE_CONFIG_DIR="\$\{OPENCODE_CONFIG_DIR:-\$HOME\/\.config\/opencode\}"/)
     }
-    for (const anyInstaller of [installer, devInstaller, psInstaller, psDevInstaller]) {
+    // Each installer loads the shared file for its shell; together they are what runs.
+    const sharedShell = readFileSync(join(projectRoot, "scripts/installer-common.sh"), "utf8")
+    const sharedPowerShell = readFileSync(join(projectRoot, "scripts/installer-common.ps1"), "utf8")
+    for (const anyInstaller of [installer + sharedShell, devInstaller + sharedShell, psInstaller + sharedPowerShell, psDevInstaller + sharedPowerShell]) {
       // Default fusion models come from the shipped agent files, not from per-installer constants.
       assert.doesNotMatch(anyInstaller, /DEFAULT_FUSION|DefaultFusion/u)
       assert.match(anyInstaller, /get-agent-model/u)
+    }
+    for (const anyInstaller of [installer, devInstaller, psInstaller, psDevInstaller]) {
+      assert.match(anyInstaller, /installer-common\.(?:sh|ps1)/u)
     }
     assert.match(installer, /releases\/latest\/download\/open-ultracode-release\.tar\.gz/)
     assert.match(devInstaller, /pnpm install --frozen-lockfile/)
@@ -231,7 +235,6 @@ function createAssetFixture(): string {
     "src",
     ".opencode/plugins",
     ".opencode/plugins/open-ultracode",
-    ".opencode/lib",
     ".opencode/skills/open-ultracode",
     "assets/agents",
     ".opencode/commands",
@@ -291,7 +294,6 @@ updates:
   writeFileSync(join(root, ".github/workflows/ci.yml"), "on: [push]\n")
 
   writeFileSync(join(root, ".opencode/plugins/open-ultracode/index.ts"), "export { default } from \"../../../src/plugin.js\"\n")
-  writeFileSync(join(root, ".opencode/lib/fusion-config.ts"), "export async function configureFusionModels() {}\n")
   writeFileSync(join(root, ".opencode/skills/open-ultracode/SKILL.md"), skillAsset())
   for (const command of [
     ["ultracode.md", "comprehensive"],

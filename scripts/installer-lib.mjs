@@ -4,6 +4,8 @@
 // and agent files happens here so it can be tested with fixtures (tests/installer-lib.test.ts).
 //
 // Usage:
+//   node scripts/installer-lib.mjs install-assets --source-dir <dir> --config-dir <dir>
+//   node scripts/installer-lib.mjs remove-assets --source-dir <dir> --config-dir <dir>
 //   node scripts/installer-lib.mjs register --config-dir <dir> --plugin-path <dir>
 //   node scripts/installer-lib.mjs unregister --config-dir <dir>
 //   node scripts/installer-lib.mjs get-agent-model <agent.md>
@@ -309,6 +311,82 @@ export function listModels({ configDir, run = runOpencodeModels, attempts = 3, d
   return orderModels([...configured, ...detected])
 }
 
+export const backupDirName = "open-ultracode-backup"
+
+/** Shipped agents live outside .opencode so they never shadow the user's agents in this repository. */
+function shippedDir(sourceDir, kind) {
+  return path.join(sourceDir, kind === "agents" ? "assets" : ".opencode", kind)
+}
+
+/** The command or agent files a release or checkout ships. */
+function shippedFiles(sourceDir, kind) {
+  const directory = shippedDir(sourceDir, kind)
+  return fs.existsSync(directory) ? fs.readdirSync(directory).filter((name) => name.endsWith(".md")).sort() : []
+}
+
+/** Every file below a directory, as paths relative to it. */
+function filesBelow(directory, prefix = "") {
+  if (!fs.existsSync(directory)) return []
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const relative = path.join(prefix, entry.name)
+    return entry.isDirectory() ? filesBelow(path.join(directory, entry.name), relative) : [relative]
+  })
+}
+
+// OpenCode 2 does not load <config>/tools; the plugin registers the fusion tool itself.
+const legacyFiles = [path.join("tools", "open_ultracode_configure_fusion.ts"), path.join("lib", "fusion-config.ts")]
+
+/**
+ * Copies the skill, commands, and agents from a release or checkout into the opencode config
+ * directory. An installed file that is about to get different content is first saved under
+ * <config>/open-ultracode-backup, so a local edit survives an upgrade. The backup holds the
+ * files replaced by the latest install only. Returns the config-relative paths that were saved.
+ */
+export function installAssets({ sourceDir, configDir }) {
+  const skillSource = path.join(sourceDir, ".opencode", "skills", "open-ultracode")
+  const skillTarget = path.join("skills", "open-ultracode")
+  const copies = [
+    ...filesBelow(skillSource).map((file) => ({ from: path.join(skillSource, file), to: path.join(skillTarget, file) })),
+    ...["commands", "agents"].flatMap((kind) =>
+      shippedFiles(sourceDir, kind).map((name) => ({ from: path.join(shippedDir(sourceDir, kind), name), to: path.join(kind, name) })))
+  ]
+  if (!copies.some((copy) => copy.to === path.join(skillTarget, "SKILL.md"))) {
+    throw new InstallerError(`${sourceDir} does not contain the OpenUltraCode skill`)
+  }
+
+  const backupDir = path.join(configDir, backupDirName)
+  fs.rmSync(backupDir, { recursive: true, force: true })
+  const saved = []
+  for (const copy of copies) {
+    const target = path.join(configDir, copy.to)
+    if (fs.existsSync(target) && !fs.readFileSync(target).equals(fs.readFileSync(copy.from))) {
+      const backup = path.join(backupDir, copy.to)
+      fs.mkdirSync(path.dirname(backup), { recursive: true })
+      fs.copyFileSync(target, backup)
+      saved.push(copy.to)
+    }
+  }
+
+  // The skill directory is replaced as a whole, so a file that no longer ships does not linger.
+  fs.rmSync(path.join(configDir, skillTarget), { recursive: true, force: true })
+  for (const copy of copies) {
+    const target = path.join(configDir, copy.to)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.copyFileSync(copy.from, target)
+  }
+  for (const file of legacyFiles) fs.rmSync(path.join(configDir, file), { force: true })
+  return saved
+}
+
+/** Removes exactly the files `sourceDir` ships, never a user's own ultracode-* agents or commands. */
+export function removeAssets({ sourceDir, configDir }) {
+  fs.rmSync(path.join(configDir, "skills", "open-ultracode"), { recursive: true, force: true })
+  for (const kind of ["commands", "agents"]) {
+    for (const name of shippedFiles(sourceDir, kind)) fs.rmSync(path.join(configDir, kind, name), { force: true })
+  }
+  for (const file of legacyFiles) fs.rmSync(path.join(configDir, file), { force: true })
+}
+
 const fusionRoles = [
   ["Fusion panel A", "ultracode-fusion-panel-a.md"],
   ["Fusion panel B", "ultracode-fusion-panel-b.md"],
@@ -331,11 +409,7 @@ export function installSummary({ configDir, sourceDir }) {
   const entries = [...(Array.isArray(config.plugins) ? config.plugins : []), ...(Array.isArray(config.plugin) ? config.plugin : [])]
     .filter(isOpenUltraCodePluginEntry)
     .map((entry) => (typeof entry === "string" ? entry : entry.package))
-  // Shipped agents live outside .opencode so they never shadow the user's agents in this repository.
-  const shippedDir = (kind) => path.join(sourceDir, kind === "agents" ? "assets" : ".opencode", kind)
-  const shipped = (kind) => fs.existsSync(shippedDir(kind))
-    ? fs.readdirSync(shippedDir(kind)).filter((name) => name.endsWith(".md") && fs.existsSync(path.join(configDir, kind, name)))
-    : []
+  const shipped = (kind) => shippedFiles(sourceDir, kind).filter((name) => fs.existsSync(path.join(configDir, kind, name)))
   const commands = shipped("commands").map((name) => `/${name.replace(/\.md$/u, "")}`)
 
   return [
@@ -362,6 +436,18 @@ function readOption(args, name) {
 export function main(argv, log = console.log) {
   const [command, ...args] = argv
   switch (command) {
+    case "install-assets": {
+      const configDir = readOption(args, "--config-dir")
+      const saved = installAssets({ sourceDir: readOption(args, "--source-dir"), configDir })
+      if (saved.length > 0) {
+        log(`OpenUltraCode: ${saved.length} installed file(s) changed; the previous versions are in ${path.join(configDir, backupDirName)}:`)
+        for (const file of saved) log(`  ${file}`)
+      }
+      return
+    }
+    case "remove-assets":
+      removeAssets({ sourceDir: readOption(args, "--source-dir"), configDir: readOption(args, "--config-dir") })
+      return
     case "register":
       registerPlugin({ configDir: readOption(args, "--config-dir"), pluginPath: readOption(args, "--plugin-path"), log })
       return

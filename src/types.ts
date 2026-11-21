@@ -71,7 +71,6 @@ export interface AcceptanceCriterion {
   readonly text: string
   readonly source: AcceptanceCriterionSource
   readonly status: AcceptanceCriterionStatus
-  readonly requirementId?: string
 }
 
 interface FindingBase {
@@ -155,10 +154,6 @@ export interface OpenUltraCodeOptions {
   readonly highEffort: HighEffortOptions
   readonly state: {
     readonly directory: string
-    readonly persistTranscripts: false
-  }
-  readonly notices: {
-    readonly showDegradation: boolean
   }
 }
 

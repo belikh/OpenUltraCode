@@ -19,11 +19,7 @@ describe("OpenUltraCode configuration", () => {
           outputTokens: 64000
         },
         state: {
-          directory: ".opencode/open-ultracode/state",
-          persistTranscripts: false
-        },
-        notices: {
-          showDegradation: true
+          directory: ".opencode/open-ultracode/state"
         }
       }
     })
@@ -34,9 +30,6 @@ describe("OpenUltraCode configuration", () => {
       adversarialReview: "recommended",
       highEffort: {
         effort: "high"
-      },
-      notices: {
-        showDegradation: false
       }
     })
 
@@ -48,7 +41,7 @@ describe("OpenUltraCode configuration", () => {
       effort: "high",
       outputTokens: 64000
     })
-    assert.deepEqual(parsed.value.notices, { showDegradation: false })
+    assert.deepEqual(parsed.value.state, { directory: ".opencode/open-ultracode/state" })
   })
 
   it("turns disabled mode into an inert configuration", () => {
@@ -83,9 +76,6 @@ describe("OpenUltraCode configuration", () => {
       },
       state: {
         directory: "../outside"
-      },
-      notices: {
-        showDegradation: "sometimes"
       }
     })
 
@@ -95,16 +85,14 @@ describe("OpenUltraCode configuration", () => {
       "adversarialReview must be one of: required, recommended, disabled",
       "verificationGate must be one of: strict, advisory, disabled",
       "highEffort.outputTokens must be an integer between 1024 and 200000 when provided",
-      "state.directory must be a project-relative path and must not contain '..' segments",
-      "notices.showDegradation must be a boolean when provided"
+      "state.directory must be a project-relative path and must not contain '..' segments"
     ])
   })
 
   it("returns actionable errors for malformed option sections", () => {
     const malformedOptions: unknown = {
       highEffort: true,
-      state: "outside",
-      notices: 1
+      state: "outside"
     }
 
     const parsed = parseOpenUltraCodeOptions(malformedOptions)
@@ -112,19 +100,14 @@ describe("OpenUltraCode configuration", () => {
     assert.equal(parsed.ok, false)
     assert.deepEqual(parsed.errors, [
       "highEffort must be an object when provided",
-      "state must be an object when provided",
-      "notices must be an object when provided"
+      "state must be an object when provided"
     ])
   })
 
-  it("rejects transcript persistence instead of weakening local-state defaults", () => {
-    const parsed = parseOpenUltraCodeOptions({
-      state: {
-        persistTranscripts: true
-      }
-    })
+  it("rejects options that are not an object", () => {
+    const parsed = parseOpenUltraCodeOptions("strict")
 
     assert.equal(parsed.ok, false)
-    assert.deepEqual(parsed.errors, ["state.persistTranscripts must be false; transcript persistence is not implemented"])
+    assert.deepEqual(parsed.errors, ["options must be an object when provided"])
   })
 })
