@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -6,9 +6,11 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 
 import {
+  backupDirName,
   catalogProviders,
   configuredModels,
   getAgentModel,
+  installAssets,
   installSummary,
   listModels,
   orderModels,
@@ -16,6 +18,7 @@ import {
   normalizePluginPath,
   parseJsonc,
   registerPlugin,
+  removeAssets,
   setAgentModel,
   unregisterPlugin
 } from "../scripts/installer-lib.mjs"
@@ -210,6 +213,82 @@ describe("installer agent model editing", () => {
 
     assert.throws(() => setAgentModel(file, "not a model"), /must be provider\/model/u)
     assert.equal(readFileSync(file, "utf8"), "---\nmodel: a/b\n---\n")
+  })
+})
+
+describe("installer assets", () => {
+  const sourceDir = process.cwd()
+  const shippedCommands = readdirSync(join(sourceDir, ".opencode", "commands")).filter((name) => name.endsWith(".md")).sort()
+  const shippedAgents = readdirSync(join(sourceDir, "assets", "agents")).filter((name) => name.endsWith(".md")).sort()
+
+  it("copies the skill and every shipped command and agent, and removes files left by older releases", () => {
+    const dir = configDir()
+    mkdirSync(join(dir, "tools"))
+    mkdirSync(join(dir, "lib"))
+    writeFileSync(join(dir, "tools", "open_ultracode_configure_fusion.ts"), "legacy")
+    writeFileSync(join(dir, "lib", "fusion-config.ts"), "legacy")
+
+    assert.deepEqual(installAssets({ sourceDir, configDir: dir }), [])
+
+    assert.deepEqual(readdirSync(join(dir, "commands")).sort(), shippedCommands)
+    assert.deepEqual(readdirSync(join(dir, "agents")).sort(), shippedAgents)
+    assert.equal(
+      readFileSync(join(dir, "skills", "open-ultracode", "SKILL.md"), "utf8"),
+      readFileSync(join(sourceDir, ".opencode", "skills", "open-ultracode", "SKILL.md"), "utf8")
+    )
+    assert.ok(!existsSync(join(dir, "tools", "open_ultracode_configure_fusion.ts")))
+    assert.ok(!existsSync(join(dir, "lib", "fusion-config.ts")))
+    assert.ok(!existsSync(join(dir, backupDirName)), "a first install has nothing to back up")
+  })
+
+  it("saves a locally edited file before replacing it, and keeps only the latest install's backups", () => {
+    const dir = configDir()
+    installAssets({ sourceDir, configDir: dir })
+    const agent = join(dir, "agents", "open-ultracode.md")
+    const edited = `${readFileSync(agent, "utf8")}\nmy own instruction\n`
+    writeFileSync(agent, edited)
+    appendFileSync(join(dir, "skills", "open-ultracode", "SKILL.md"), "\nmy own rule\n")
+    writeFileSync(join(dir, "skills", "open-ultracode", "notes.md"), "a file that no longer ships")
+
+    const saved = installAssets({ sourceDir, configDir: dir })
+
+    assert.deepEqual([...saved].sort(), [join("agents", "open-ultracode.md"), join("skills", "open-ultracode", "SKILL.md")])
+    assert.equal(readFileSync(join(dir, backupDirName, "agents", "open-ultracode.md"), "utf8"), edited)
+    assert.equal(readFileSync(agent, "utf8"), readFileSync(join(sourceDir, "assets", "agents", "open-ultracode.md"), "utf8"))
+    assert.ok(!existsSync(join(dir, "skills", "open-ultracode", "notes.md")))
+
+    // Nothing changed since, so the next install has nothing to save and clears the old backups.
+    assert.deepEqual(installAssets({ sourceDir, configDir: dir }), [])
+    assert.ok(!existsSync(join(dir, backupDirName)))
+  })
+
+  it("removes exactly the shipped files and leaves the user's own agents and commands", () => {
+    const dir = configDir()
+    installAssets({ sourceDir, configDir: dir })
+    writeFileSync(join(dir, "agents", "ultracode-fusion-custom.md"), "mine")
+    writeFileSync(join(dir, "commands", "ultracode-mine.md"), "mine")
+
+    removeAssets({ sourceDir, configDir: dir })
+
+    assert.deepEqual(readdirSync(join(dir, "agents")), ["ultracode-fusion-custom.md"])
+    assert.deepEqual(readdirSync(join(dir, "commands")), ["ultracode-mine.md"])
+    assert.ok(!existsSync(join(dir, "skills", "open-ultracode")))
+  })
+
+  it("refuses a source directory that does not hold the skill", () => {
+    assert.throws(() => installAssets({ sourceDir: configDir(), configDir: configDir() }), /does not contain the OpenUltraCode skill/u)
+  })
+
+  it("reports saved files through the command line", () => {
+    const dir = configDir()
+    installAssets({ sourceDir, configDir: dir })
+    appendFileSync(join(dir, "commands", "ultracode.md"), "\nlocal\n")
+
+    const result = spawnSync(process.execPath, [libPath, "install-assets", "--source-dir", sourceDir, "--config-dir", dir], { encoding: "utf8" })
+
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stdout, /1 installed file\(s\) changed; the previous versions are in /u)
+    assert.ok(result.stdout.includes(join("commands", "ultracode.md")))
   })
 })
 

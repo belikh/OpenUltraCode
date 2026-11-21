@@ -43,7 +43,7 @@ const docs: readonly DocExpectation[] = [
       /-remove/,
       /-Remove/,
       /install\.ps1.*-Remove|\.\\install\.ps1 -Remove/is,
-      /^1\. Install the latest release with `curl -fsSL https:\/\/raw\.githubusercontent\.com\/norandom\/OpenUltraCode\/main\/install\.sh \| sh`\./im,
+      /^1\. Install the latest release with `curl -fsSL https:\/\/raw\.githubusercontent\.com\/belikh\/OpenUltraCode\/main\/install\.sh \| sh`\./im,
       /~\/\.config\/opencode/i,
       /global plugin, commands, skills, and agents/i,
       /minimumReleaseAge: 4320/i,

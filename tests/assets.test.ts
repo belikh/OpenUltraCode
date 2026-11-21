@@ -91,10 +91,16 @@ describe("OpenUltraCode scaffold", () => {
     for (const shInstaller of [installer, devInstaller]) {
       assert.match(shInstaller, /OPENCODE_CONFIG_DIR="\$\{OPENCODE_CONFIG_DIR:-\$HOME\/\.config\/opencode\}"/)
     }
-    for (const anyInstaller of [installer, devInstaller, psInstaller, psDevInstaller]) {
+    // Each installer loads the shared file for its shell; together they are what runs.
+    const sharedShell = readFileSync(join(projectRoot, "scripts/installer-common.sh"), "utf8")
+    const sharedPowerShell = readFileSync(join(projectRoot, "scripts/installer-common.ps1"), "utf8")
+    for (const anyInstaller of [installer + sharedShell, devInstaller + sharedShell, psInstaller + sharedPowerShell, psDevInstaller + sharedPowerShell]) {
       // Default fusion models come from the shipped agent files, not from per-installer constants.
       assert.doesNotMatch(anyInstaller, /DEFAULT_FUSION|DefaultFusion/u)
       assert.match(anyInstaller, /get-agent-model/u)
+    }
+    for (const anyInstaller of [installer, devInstaller, psInstaller, psDevInstaller]) {
+      assert.match(anyInstaller, /installer-common\.(?:sh|ps1)/u)
     }
     assert.match(installer, /releases\/latest\/download\/open-ultracode-release\.tar\.gz/)
     assert.match(devInstaller, /pnpm install --frozen-lockfile/)

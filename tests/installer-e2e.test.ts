@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { spawnSync, type SpawnSyncReturns } from "node:child_process"
 import { delimiter, join } from "node:path"
 import { tmpdir } from "node:os"
@@ -108,6 +109,16 @@ function releaseArchive(): string {
     archive = buildReleaseArchive(join(tempDir("archive"), "open-ultracode-release.tar.gz"))
   }
   return archive
+}
+
+/** A copy of the release archive with the checksum file a release publishes next to it. */
+function archiveWithChecksum(checksum: "matching" | "wrong"): string {
+  const copy = join(tempDir(`archive-${checksum}`), "open-ultracode-release.tar.gz")
+  copyFileSync(releaseArchive(), copy)
+  const hash = checksum === "matching" ? createHash("sha256").update(readFileSync(copy)).digest("hex") : "0".repeat(64)
+  // The format sha256sum writes: hash, two spaces, file name.
+  writeFileSync(`${copy}.sha256`, `${hash}  open-ultracode-release.tar.gz\n`)
+  return copy
 }
 
 const powershells = [
@@ -231,6 +242,27 @@ for (const shell of powershells) {
       assert.ok(!existsSync(installDir))
       assertForeignSettingsKept(configDir)
     })
+
+    it("checks a release archive against its checksum and saves locally edited files", () => {
+      const configDir = seedConfigDir()
+      const installDir = join(tempDir("home"), "open-ultracode")
+      const install = (archive: string) =>
+        run("install.ps1", "-Archive", archive, "-InstallDir", installDir, "-SkipRuntimeCheck", "-NonInteractive", "-OpenCodeConfigDir", configDir)
+
+      assertOk(install(archiveWithChecksum("matching")), "install.ps1 with a matching checksum")
+      const skill = join(configDir, "skills", "open-ultracode", "SKILL.md")
+      writeFileSync(skill, "my own skill text\n")
+
+      const tampered = install(archiveWithChecksum("wrong"))
+      assert.notEqual(tampered.status, 0, "an archive that does not match its checksum must fail the install")
+      assert.match(`${tampered.stdout}${tampered.stderr}`, /does not match its checksum/u)
+      assert.equal(readFileSync(skill, "utf8"), "my own skill text\n", "a refused archive must not touch the installation")
+
+      const updated = install(archiveWithChecksum("matching"))
+      assertOk(updated, "second install.ps1")
+      assert.match(updated.stdout, /installed file\(s\) changed; the previous versions are in/u)
+      assert.equal(readFileSync(join(configDir, "open-ultracode-backup", "skills", "open-ultracode", "SKILL.md"), "utf8"), "my own skill text\n")
+    })
   })
 }
 
@@ -291,6 +323,26 @@ describe("sh installers", { skip: !runShTests && "set OPENULTRACODE_E2E_SH=1 to 
     assert.deepEqual(ourPluginPaths(readConfig(configDir)), [])
     assert.ok(!existsSync(installDir))
     assertForeignSettingsKept(configDir)
+  })
+
+  it("checks a release archive against its checksum and saves locally edited files", () => {
+    const configDir = seedConfigDir()
+    const installDir = join(home, "open-ultracode-checksum")
+    const install = (archive: string) => run("install.sh", configDir, installDir, "--skip-runtime-check", "--non-interactive", "--archive", archive)
+
+    assertOk(install(archiveWithChecksum("matching")), "install.sh with a matching checksum")
+    const skill = join(configDir, "skills", "open-ultracode", "SKILL.md")
+    writeFileSync(skill, "my own skill text\n")
+
+    const tampered = install(archiveWithChecksum("wrong"))
+    assert.notEqual(tampered.status, 0, "an archive that does not match its checksum must fail the install")
+    assert.match(`${tampered.stdout}${tampered.stderr}`, /does not match its checksum/u)
+    assert.equal(readFileSync(skill, "utf8"), "my own skill text\n", "a refused archive must not touch the installation")
+
+    const updated = install(archiveWithChecksum("matching"))
+    assertOk(updated, "second install.sh")
+    assert.match(updated.stdout, /installed file\(s\) changed; the previous versions are in/u)
+    assert.equal(readFileSync(join(configDir, "open-ultracode-backup", "skills", "open-ultracode", "SKILL.md"), "utf8"), "my own skill text\n")
   })
 
   it("refuses to replace a directory that is not an OpenUltraCode installation", () => {

@@ -8,8 +8,8 @@ import assert from "node:assert/strict"
 // Syntax checks with every checker that is installed: sh, dash, shellcheck, pwsh 7, and
 // Windows PowerShell 5.1. Missing checkers are reported as skipped, never as passed.
 
-const shellScripts = ["install.sh", "install-dev.sh", ".githooks/pre-commit", ".githooks/pre-push"]
-const powershellScripts = ["install.ps1", "install-dev.ps1"]
+const shellScripts = ["install.sh", "install-dev.sh", "scripts/installer-common.sh", ".githooks/pre-commit", ".githooks/pre-push"]
+const powershellScripts = ["install.ps1", "install-dev.ps1", "scripts/installer-common.ps1"]
 
 function available(command: string, args: string[]): boolean {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 30_000 })

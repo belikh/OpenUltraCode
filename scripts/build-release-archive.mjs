@@ -17,6 +17,8 @@ export const releaseFiles = [
   ".opencode/plugins",
   ".opencode/skills",
   "src",
+  "scripts/installer-common.sh",
+  "scripts/installer-common.ps1",
   "scripts/installer-lib.mjs",
   "scripts/model-menu.mjs",
   "scripts/runtime-check.mjs",

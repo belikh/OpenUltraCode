@@ -73,7 +73,7 @@ Role agents use conservative permissions:
 
 Run the matching installer with its removal flag to undo an install:
 
-- sh release: `./install.sh -remove` (or `--remove`, `-r`); piped form: `curl -fsSL https://raw.githubusercontent.com/norandom/OpenUltraCode/main/install.sh | sh -s -- --remove`
+- sh release: `./install.sh -remove` (or `--remove`, `-r`); piped form: `curl -fsSL https://raw.githubusercontent.com/belikh/OpenUltraCode/main/install.sh | sh -s -- --remove`
 - sh dev: `./install-dev.sh -remove`
 - PowerShell release: `.\install.ps1 -Remove`
 - PowerShell dev: `.\install-dev.ps1 -Remove`
