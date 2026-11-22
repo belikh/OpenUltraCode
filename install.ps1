@@ -65,11 +65,25 @@ function Get-TarCommand {
   throw "tar is required to extract the release archive."
 }
 
+# The SHA-256 of a file as lowercase hex, computed with .NET. Get-FileHash is a script function
+# in Windows PowerShell 5.1 and is not found when PSModulePath lists PowerShell 7's modules,
+# which is the case in every process that PowerShell 7 started.
+function Get-Sha256([string]$Path) {
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Path).ProviderPath)
+  try {
+    return ([System.BitConverter]::ToString($sha256.ComputeHash($stream)) -replace "-", "").ToLowerInvariant()
+  } finally {
+    $stream.Dispose()
+    $sha256.Dispose()
+  }
+}
+
 # $ChecksumPath holds what the release publishes: the output of sha256sum for the archive.
 function Assert-ArchiveChecksum([string]$ArchivePath, [string]$ChecksumPath) {
   $line = [string](Get-Content -Path $ChecksumPath -TotalCount 1)
   $expected = ($line.Trim() -split "\s+")[0].ToLowerInvariant()
-  $actual = (Get-FileHash -Path $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $actual = Get-Sha256 $ArchivePath
   if (-not $expected -or $expected -ne $actual) {
     throw "The release archive does not match its checksum (expected $expected, got $actual); the existing installation was left unchanged."
   }

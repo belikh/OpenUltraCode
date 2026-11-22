@@ -53,8 +53,15 @@ const rules: ReadonlyArray<{ readonly applies: readonly string[]; readonly test:
     // A release that is downloaded must match the checksum published with it.
     test: (content) =>
       (/\bverify_checksum "\$archive" "\$archive\.sha256"/u.test(content) && /sha256sum/u.test(content) && /\$RELEASE_URL\.sha256/u.test(content)) ||
-      (/Assert-ArchiveChecksum \$downloadPath \$checksumPath/u.test(content) && /Get-FileHash/u.test(content) && /\$releaseUrl\.sha256/u.test(content)),
+      (/Assert-ArchiveChecksum \$downloadPath \$checksumPath/u.test(content) && /Cryptography\.SHA256\]::Create\(\)/u.test(content) && /\$releaseUrl\.sha256/u.test(content)),
     message: "must verify the downloaded release archive against its published SHA-256 checksum"
+  },
+  {
+    applies: powershellInstallers,
+    // These are script functions of Windows PowerShell 5.1's Utility module. It does not find them
+    // when PSModulePath lists PowerShell 7's modules, as in any process that PowerShell 7 started.
+    test: (content) => !/\b(?:Get-FileHash|New-Guid|New-TemporaryFile|Format-Hex|Import-PowerShellDataFile)\b/u.test(content.replace(/^\s*#.*$/gmu, "")),
+    message: "must not call Get-FileHash, New-Guid, New-TemporaryFile, Format-Hex or Import-PowerShellDataFile (missing in Windows PowerShell 5.1 under a PowerShell 7 PSModulePath); use .NET"
   },
   {
     applies: allInstallers,

@@ -94,6 +94,13 @@ describe("OpenUltraCode installer guard rails", () => {
       error: /install\.ps1 must verify the downloaded release archive/u
     },
     {
+      name: "a cmdlet that Windows PowerShell 5.1 cannot find under a PowerShell 7 module path",
+      file: "install.ps1",
+      from: "$actual = Get-Sha256 $ArchivePath",
+      to: "$actual = (Get-FileHash -Path $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()",
+      error: /install\.ps1 must not call Get-FileHash/u
+    },
+    {
       name: "a bootstrap helper in install.ps1 that drifted from the shared file",
       file: "install.ps1",
       from: "if ($LASTEXITCODE -ne 0) { throw \"$What failed with exit code $LASTEXITCODE\" }",
