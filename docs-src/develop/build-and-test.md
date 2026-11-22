@@ -1,6 +1,6 @@
 ---
 title: Build and test
-summary: Set up a checkout, run the checks, install the checkout into opencode and rebuild these pages.
+summary: Set up a checkout, run the checks, install the checkout into opencode and rebuild these pages with the documentation generator.
 order: 10
 icon: git-branch
 audience: developers
@@ -38,6 +38,8 @@ pnpm run check
 
 The tests install into temporary directories and never touch `~/.config/opencode`. The syntax tests for `dash`, `shellcheck` and PowerShell are skipped when the tool is missing, and the output names each skipped test.
 
+`check` works offline, so it does not run the documentation generator. [Documentation](#documentation) has the command for the pages.
+
 ## Git hooks
 
 | Hook | When | What it does |
@@ -61,6 +63,7 @@ The tests install into temporary directories and never touch `~/.config/opencode
 | `.opencode/skills`, `.opencode/commands`, `assets/agents` | The skill, the commands and the agents that the installer copies. |
 | `scripts/installer-lib.mjs` | Every edit of `opencode.json` and of installed files. |
 | `scripts/installer-common.sh`, `scripts/installer-common.ps1` | The steps the release and development installers share. |
+| `scripts/docs.mjs` | Fetches and runs the documentation generator. |
 
 `tests/plugin-contract.test.ts` compiles `src/opencode-v2.ts` against the real `@opencode/plugin` types, so `pnpm run check` fails when the API changes.
 
@@ -76,12 +79,41 @@ The plugin entry in `opencode.json` now points at the checkout. Restart opencode
 
 These pages are written in `docs-src/` and generated with `jupiter-docs` from [belikh/docs](https://github.com/belikh/docs). The files in `docs/` are output. Change a page in `docs-src/`, then run:
 
-```sh title="Check and rebuild the pages"
-jupiter-docs check
-jupiter-docs build --md
+```sh title="Rebuild and check the pages"
+pnpm run docs:build
+pnpm run docs:check
+```
+
+```text title="Output of docs:check"
+19 page(s) OK
+Generated Markdown is current (19 page(s)).
 ```
 
 Commit `docs-src/` and `docs/` together.
+
+The generator is not on npm, so `pnpm install` cannot provide it. `scripts/docs.mjs` clones it into `.jupiter-docs/` on first use and downloads the design system release that it reads. Git ignores that directory. The first run needs `git`, `npm` and network access.
+
+| Command | What it does |
+| --- | --- |
+| `pnpm run docs:check` | Validates the pages and their wording, then fails when `docs/` is out of date. |
+| `pnpm run docs:build` | Rewrites `docs/` from `docs-src/`. |
+| `node scripts/docs.mjs build --site` | Builds the site into `dist/site`. |
+| `node scripts/docs.mjs --update check` | Fetches the newest generator and design system first, then validates the pages. |
+
+Every other argument goes to `jupiter-docs` unchanged.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `JUPITER_DOCS_DIR` | `.jupiter-docs` in the repository | A checkout of `belikh/docs` to use. The script never changes a checkout that this variable names. |
+| `JUPITER_DESIGN_DIR` | `vendor/design` in the generator checkout | The unpacked design system release. |
+
+A checkout that `JUPITER_DOCS_DIR` names must be ready to run. If it is incomplete, the script stops and names each missing part:
+
+```text title="Error"
+docs: /path/to/docs is missing the generator's dependencies (run `npm ci` in it)
+```
+
+The `Docs` workflow runs the validation, the check of `docs/` and the site build on every push to `main` and on every pull request. The release workflow runs it too, because `docs/` is part of the release archive.
 
 :::see-also
 - [[develop/release]]

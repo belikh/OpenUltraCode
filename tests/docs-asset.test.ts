@@ -86,9 +86,9 @@ describe("OpenUltraCode documentation assets", () => {
 })
 
 // The pages in docs/ are generated from docs-src/ with jupiter-docs (github.com/belikh/docs).
-// The generator is not a dependency of this repository, so these tests cannot rebuild the
-// pages. They check what can go wrong without it: a page that was never generated, a page
-// edited by hand, and a reference page that no longer lists what the code ships.
+// `pnpm run docs:check` and the Docs workflow run the generator; it needs a download, so these
+// tests stay offline. They check what can go wrong without it: a page that was never generated,
+// a page edited by hand, and a reference page that no longer lists what the code ships.
 describe("OpenUltraCode documentation pages", () => {
   const markdownBelow = (directory: string, prefix = ""): string[] =>
     readdirSync(join(process.cwd(), directory, prefix), { withFileTypes: true }).flatMap((entry) => {

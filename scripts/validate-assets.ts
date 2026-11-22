@@ -180,16 +180,16 @@ function validateCommands(root: string, errors: string[]): void {
 }
 
 function validateComplianceControls(root: string, errors: string[]): void {
-  const releasePath = ".github/workflows/release.yml"
-  const releaseWorkflow = readAsset(root, releasePath, errors)
-  if (releaseWorkflow !== undefined) {
-    validateImmutableActionReferences(releasePath, releaseWorkflow, errors)
+  const workflowsPath = ".github/workflows"
+  const workflows = existsSync(join(root, workflowsPath)) ? readdirSync(join(root, workflowsPath)).filter((name) => /\.ya?ml$/u.test(name)) : []
+  for (const name of workflows) {
+    const relativePath = `${workflowsPath}/${name}`
+    validateImmutableActionReferences(relativePath, readFileSync(join(root, relativePath), "utf8"), errors)
   }
 
   const scannerPath = ".github/workflows/plugin-security-scan.yml"
   const scannerWorkflow = readAsset(root, scannerPath, errors)
   if (scannerWorkflow !== undefined) {
-    validateImmutableActionReferences(scannerPath, scannerWorkflow, errors)
     for (const [pattern, message] of [
       [/^permissions:\s*\n {2}contents: read\s*$/mu, "must grant only read access to contents"],
       [/persist-credentials:\s*false/u, "must disable persisted checkout credentials"],

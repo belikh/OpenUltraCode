@@ -187,6 +187,19 @@ describe("OpenUltraCode scaffold", () => {
     assert.match(result.errors.join("\n"), /checkout@v4.*full commit SHA/i)
   })
 
+  it("rejects a mutable action reference in any workflow, not only the release", () => {
+    const root = createAssetFixture()
+    writeFileSync(join(root, ".github/workflows/docs.yml"), "steps:\n  - uses: actions/setup-node@v7\n  - uses: ./.github/workflows/ci.yml\n")
+
+    const result = validateAssets(root)
+
+    assert.equal(result.ok, false)
+    assert.deepEqual(
+      result.errors.filter((error) => error.includes("full commit SHA")),
+      [".github/workflows/docs.yml action actions/setup-node@v7 must be pinned to a full commit SHA"]
+    )
+  })
+
   it("allows model frontmatter only for approved fusion agents", () => {
     const root = createAssetFixture()
     writeFileSync(

@@ -14,6 +14,8 @@
     "validate:assets": "tsx scripts/validate-assets.ts",
     "validate:installers": "tsx scripts/validate-installers.ts",
     "check": "tsx scripts/validate-assets.ts && tsx scripts/validate-installers.ts && tsc --noEmit && eslint . && node --import tsx --test \"tests/**/*.test.ts\"",
+    "docs:check": "node scripts/docs.mjs check && node scripts/docs.mjs build --check",
+    "docs:build": "node scripts/docs.mjs build --md",
     "prepare": "node scripts/install-git-hooks.mjs",
     "check:runtime": "node scripts/runtime-check.mjs --live"
   },

@@ -13,8 +13,12 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
+  # docs/ ships in the release archive, so a release needs pages that are valid and current.
+  docs:
+    uses: ./.github/workflows/docs.yml
+
   release:
-    needs: ci
+    needs: [ci, docs]
     runs-on: ubuntu-latest
     permissions:
       contents: write

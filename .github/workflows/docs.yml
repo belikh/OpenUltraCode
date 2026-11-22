@@ -1,0 +1,42 @@
+name: Docs
+
+# Validates docs-src/, fails when the generated docs/ is out of date, and builds the site.
+# scripts/docs.mjs fetches the generator (jupiter-docs from belikh/docs) and the design system
+# it reads; neither is on npm, so `pnpm install` cannot provide them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    name: check docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Validate pages and wording
+        run: node scripts/docs.mjs check
+
+      - name: Check that docs/ is current
+        run: node scripts/docs.mjs build --check
+
+      - name: Build the site
+        run: node scripts/docs.mjs build --site
