@@ -31,7 +31,7 @@ The installer ends with a summary of what it found on disk:
 **Output**
 
 ```text
-OpenUltraCode 2.1.0 installed
+OpenUltraCode 2.1.1 installed
   Source:          /home/you/.local/share/open-ultracode
   Plugin entry:    /home/you/.local/share/open-ultracode/.opencode/plugins/open-ultracode
   OpenCode config: /home/you/.config/opencode/opencode.json

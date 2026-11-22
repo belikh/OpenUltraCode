@@ -21,8 +21,8 @@ The workflow `.github/workflows/release.yml` runs on a tag of the form `v1.2.3`.
 
 ```sh title="Tag and push"
 git checkout main && git pull
-git tag v2.1.0
-git push origin v2.1.0
+git tag v2.1.1
+git push origin v2.1.1
 ```
 
 Before the push, the `pre-push` hook runs the live runtime check against your installed opencode. The workflow then:
@@ -65,8 +65,8 @@ Use this when Actions is not available.
 node scripts/build-release-archive.mjs /tmp/release/open-ultracode-release.tar.gz
 cd /tmp/release
 sha256sum open-ultracode-release.tar.gz > open-ultracode-release.tar.gz.sha256
-gh release create v2.1.0 open-ultracode-release.tar.gz open-ultracode-release.tar.gz.sha256 \
-  --repo belikh/OpenUltraCode --title v2.1.0 --target main \
+gh release create v2.1.1 open-ultracode-release.tar.gz open-ultracode-release.tar.gz.sha256 \
+  --repo belikh/OpenUltraCode --title v2.1.1 --target main \
   --notes "OpenUltraCode release archive for install.sh and install.ps1."
 ```
 
@@ -91,7 +91,7 @@ curl -fsSL https://raw.githubusercontent.com/belikh/OpenUltraCode/main/install.s
 ```
 
 ```text title="Output"
-OpenUltraCode 2.1.0 installed
+OpenUltraCode 2.1.1 installed
 ```
 
 :::see-also
